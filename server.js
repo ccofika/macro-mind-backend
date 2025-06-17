@@ -17,7 +17,14 @@ if (!fs.existsSync(dataDir)) {
 }
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://macro-mind-frontend.vercel.app/',  // Vercel URL
+    'http://localhost:3000'                // Lokalno razvijanje
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
 app.use(express.json({ limit: '1mb' })); // Povećavamo limit za JSON payload
 
 // Logiranje svih zahtjeva
