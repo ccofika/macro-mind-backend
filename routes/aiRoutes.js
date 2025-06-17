@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const aiController = require('../controllers/aiController');
 
-// Middleware za logiranje AI zahteva
+// Middleware for logging AI requests
 router.use((req, res, next) => {
   console.log('AI Request received:', {
     path: req.path,
@@ -15,7 +15,7 @@ router.use((req, res, next) => {
   next();
 });
 
-// Ruta za poboljšanje teksta - MORA biti /improve kako je konfigurisano u client/src/services/aiService.js
+// Route for improving text - MUST be /improve as configured in client/src/services/aiService.js
 router.post('/improve', aiController.improveResponse);
 
 module.exports = router;

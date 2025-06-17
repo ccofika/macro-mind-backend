@@ -1,6 +1,6 @@
 // server/controllers/aiController.js
 
-// Učitavamo dokument sa smernicama
+// Load guidelines from file
 const fs = require('fs');
 const path = require('path');
 const guidelinesFilePath = path.join(__dirname, '../data/agent-guidelines.txt');
@@ -16,7 +16,7 @@ const openai = new OpenAI({
 let agentGuidelines = '';
 
 try {
-  // Učitaj smernice iz fajla
+  // Load guidelines from file
   agentGuidelines = fs.readFileSync(guidelinesFilePath, 'utf8');
   console.log('Agent guidelines loaded successfully, length:', agentGuidelines.length);
 } catch (error) {
@@ -27,6 +27,7 @@ try {
 exports.improveResponse = async (req, res) => {
   try {
     const { originalText, improvements, systemPrompt, userPrompt } = req.body;
+    const userId = req.user.email; // Get the user ID from the authenticated request
     
     if (!originalText) {
       return res.status(400).json({ message: 'Original text is required' });
@@ -36,10 +37,10 @@ exports.improveResponse = async (req, res) => {
       return res.status(400).json({ message: 'Improvement requirements are required' });
     }
     
-    // Koristimo učitane smernice u system promptu
+    // Use the loaded guidelines in the system prompt
     try {
-      // Ako imamo sistemski prompt sa klijenta, koristimo njega
-      // U suprotnom koristimo serverske smernice
+      // If we have a system prompt from the client, use it
+      // Otherwise use the server guidelines
       const effectiveSystemPrompt = systemPrompt || 
         `You are improving customer service responses according to these guidelines:
          
@@ -49,11 +50,11 @@ exports.improveResponse = async (req, res) => {
          
          Ensure paragraphs are properly separated with double line breaks.`;
       
-      // Koristimo korisnički prompt sa klijenta ili kreiramo standardni
+      // Use the user prompt from the client or create a standard one
       const effectiveUserPrompt = userPrompt ||
         `Original: ${originalText}\n\nImprovements needed: ${improvements}`;
       
-      console.log(`Processing AI improvement with ${effectiveSystemPrompt.length} chars system prompt`);
+      console.log(`Processing AI improvement with ${effectiveSystemPrompt.length} chars system prompt for user: ${userId}`);
       
       const response = await openai.chat.completions.create({
         model: "gpt-4.1-nano-2025-04-14",
@@ -73,7 +74,7 @@ exports.improveResponse = async (req, res) => {
       
       let improvedText = response.choices[0].message.content;
       
-      // Osigurajmo pravilno formatiranje paragrafa sa \n\n
+      // Ensure proper paragraph formatting with \n\n
       improvedText = improvedText
         .replace(/\r\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')

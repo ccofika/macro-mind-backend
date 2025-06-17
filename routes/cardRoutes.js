@@ -13,6 +13,7 @@ router.post('/positions', cardController.updateCardPositions);
 // Connection routes
 router.get('/connections', cardController.getAllConnections);
 router.post('/connections', cardController.createConnection);
+router.put('/connections/:id', cardController.updateConnection);
 router.delete('/connections/:id', cardController.deleteConnection);
 
 // Canvas state route
