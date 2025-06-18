@@ -47,8 +47,31 @@ const connectionSchema = new mongoose.Schema({
   }
 });
 
-// Create compound index for faster queries and to ensure uniqueness
-connectionSchema.index({ userId: 1, spaceId: 1, sourceId: 1, targetId: 1 }, { unique: true });
+// Create indexes for faster queries (removed unique constraint to allow bidirectional connections)
+connectionSchema.index({ userId: 1, spaceId: 1 });
+connectionSchema.index({ sourceId: 1, targetId: 1 });
+connectionSchema.index({ spaceId: 1, sourceId: 1 });
+connectionSchema.index({ spaceId: 1, targetId: 1 });
+
+// Pre-save validation to prevent duplicate connections
+connectionSchema.pre('save', async function(next) {
+  // Check if a connection already exists in either direction
+  const existingConnection = await this.constructor.findOne({
+    spaceId: this.spaceId,
+    $or: [
+      { sourceId: this.sourceId, targetId: this.targetId },
+      { sourceId: this.targetId, targetId: this.sourceId }
+    ]
+  });
+  
+  if (existingConnection) {
+    const error = new Error('Connection already exists between these cards');
+    error.code = 'DUPLICATE_CONNECTION';
+    return next(error);
+  }
+  
+  next();
+});
 
 const Connection = mongoose.model('Connection', connectionSchema);
 

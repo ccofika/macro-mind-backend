@@ -72,6 +72,7 @@ spaceSchema.pre('save', function(next) {
     const ownerExists = this.members.some(member => member.userId === this.ownerId);
     
     if (!ownerExists) {
+      console.log(`Adding owner ${this.ownerId} to members of space ${this.name}`);
       this.members.push({
         userId: this.ownerId,
         role: 'owner',

@@ -7,8 +7,10 @@ const Space = require('../models/Space');
 // Get all cards for the current user or space
 exports.getAllCards = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userId = req.user.id;
     const { spaceId } = req.query;
+    
+    console.log(`Getting cards for user ${userId} in space ${spaceId}`);
     
     let query = {};
     
@@ -23,17 +25,18 @@ exports.getAllCards = async (req, res) => {
           const space = await Space.findById(spaceId);
           
           if (!space) {
+            console.log(`Space ${spaceId} not found`);
             return res.status(404).json({ success: false, message: 'Space not found' });
           }
           
-          // Check if user has access to this space
-          const isMember = space.members.some(member => member.userId === userId);
-          const isOwner = space.ownerId === userId;
-          
-          if (!space.isPublic && !isMember && !isOwner) {
+          // Use the Space model's hasAccess method for proper permission checking
+          if (!space.hasAccess(userId)) {
+            console.log(`User ${userId} denied access to space ${spaceId}`);
+            console.log(`Space details - isPublic: ${space.isPublic}, ownerId: ${space.ownerId}, members:`, space.members.map(m => ({ userId: m.userId, role: m.role })));
             return res.status(403).json({ success: false, message: 'Access denied to this space' });
           }
           
+          console.log(`User ${userId} granted access to space ${spaceId}`);
           // User has access, get all cards in this space
           query = { spaceId: spaceId };
         } catch (spaceError) {
@@ -42,11 +45,12 @@ exports.getAllCards = async (req, res) => {
         }
       }
     } else {
-      // If no spaceId specified, get only user's personal cards (backwards compatibility)
-      query = { userId };
+      // If no spaceId specified, get only user's cards using their email (for backwards compatibility)
+      query = { userId: req.user.email };
     }
     
     const cards = await Card.find(query);
+    console.log(`Found ${cards.length} cards for user ${userId} in space ${spaceId}`);
     res.json(cards);
   } catch (error) {
     console.error("Error fetching cards:", error);
@@ -57,8 +61,11 @@ exports.getAllCards = async (req, res) => {
 // Create a new card
 exports.createCard = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { type, title, content, position, spaceId } = req.body;
+    
+    console.log(`User ${userId}/${userEmail} creating card in space ${spaceId}`);
     
     if (!type || !title) {
       return res.status(400).json({ 
@@ -67,12 +74,40 @@ exports.createCard = async (req, res) => {
       });
     }
     
+    // If spaceId is provided and not public, check if user has access to the space
+    if (spaceId && spaceId !== 'public') {
+      try {
+        const space = await Space.findById(spaceId);
+        if (!space) {
+          return res.status(404).json({ 
+            success: false, 
+            message: 'Space not found' 
+          });
+        }
+        
+        // Check if user has access to this space
+        if (!space.hasAccess(userId)) {
+          console.log(`User ${userId} denied access to space ${spaceId} for card creation`);
+          return res.status(403).json({ 
+            success: false, 
+            message: 'Access denied to this space' 
+          });
+        }
+      } catch (spaceError) {
+        console.error('Error checking space access for card creation:', spaceError);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Error checking space access' 
+        });
+      }
+    }
+    
     // Generate a UUID for the card
     const cardId = uuidv4();
     
     const newCard = new Card({
       _id: cardId, // Use UUID as string ID
-      userId,
+      userId: userEmail, // Use email as userId for card ownership
       spaceId: spaceId || 'public', // Default to public space
       type,
       title,
@@ -82,6 +117,7 @@ exports.createCard = async (req, res) => {
     
     await newCard.save();
     
+    console.log(`Successfully created card ${cardId} for user ${userId}/${userEmail} in space ${spaceId}`);
     res.status(201).json(newCard);
   } catch (error) {
     console.error("Error creating card:", error);
@@ -92,11 +128,12 @@ exports.createCard = async (req, res) => {
 // Update a card
 exports.updateCard = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { id } = req.params;
     const updates = req.body;
     
-    console.log(`User ${userId} attempting to update card ${id} with:`, updates);
+    console.log(`User ${userId}/${userEmail} attempting to update card ${id} with:`, updates);
     
     // Find card first
     const card = await Card.findOne({ _id: id });
@@ -111,7 +148,7 @@ exports.updateCard = async (req, res) => {
     // Check if user has permission to update this card
     let hasPermission = false;
     
-    if (card.spaceId === 'public' || card.userId === userId) {
+    if (card.spaceId === 'public' || card.userId === userEmail) {
       hasPermission = true;
     } else if (card.spaceId && card.spaceId !== 'public') {
       // For private space cards, check if user has access to the space
@@ -152,7 +189,7 @@ exports.updateCard = async (req, res) => {
     
     await card.save();
     
-    console.log(`Successfully updated card ${id} for user ${userId}`);
+    console.log(`Successfully updated card ${id} for user ${userId}/${userEmail}`);
     res.json(card);
   } catch (error) {
     console.error("Error updating card:", error);
@@ -240,8 +277,11 @@ exports.deleteMultipleCards = async (req, res) => {
 // Get all connections for the current user or space
 exports.getAllConnections = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { spaceId } = req.query;
+    
+    console.log(`Getting connections for user ${userId}/${userEmail} in space ${spaceId}`);
     
     let query = {};
     
@@ -255,17 +295,18 @@ exports.getAllConnections = async (req, res) => {
           const space = await Space.findById(spaceId);
           
           if (!space) {
+            console.log(`Space ${spaceId} not found`);
             return res.status(404).json({ success: false, message: 'Space not found' });
           }
           
-          // Check if user has access to this space
-          const isMember = space.members.some(member => member.userId === userId);
-          const isOwner = space.ownerId === userId;
-          
-          if (!space.isPublic && !isMember && !isOwner) {
+          // Use the Space model's hasAccess method for proper permission checking
+          if (!space.hasAccess(userId)) {
+            console.log(`User ${userId} denied access to space ${spaceId}`);
+            console.log(`Space details - isPublic: ${space.isPublic}, ownerId: ${space.ownerId}, members:`, space.members.map(m => ({ userId: m.userId, role: m.role })));
             return res.status(403).json({ success: false, message: 'Access denied to this space' });
           }
           
+          console.log(`User ${userId} granted access to space ${spaceId}`);
           // User has access, get all connections in this space
           query = { spaceId: spaceId };
         } catch (spaceError) {
@@ -275,10 +316,11 @@ exports.getAllConnections = async (req, res) => {
       }
     } else {
       // If no spaceId specified, get only user's personal connections (backwards compatibility)
-      query = { userId };
+      query = { userId: userEmail };
     }
     
     const connections = await Connection.find(query);
+    console.log(`Found ${connections.length} connections for user ${userId} in space ${spaceId}`);
     res.json(connections);
   } catch (error) {
     console.error("Error fetching connections:", error);
@@ -289,13 +331,23 @@ exports.getAllConnections = async (req, res) => {
 // Create a new connection
 exports.createConnection = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { sourceId, targetId, label, spaceId } = req.body;
+    
+    console.log(`User ${userId}/${userEmail} creating connection between ${sourceId} and ${targetId} in space ${spaceId}`);
     
     if (!sourceId || !targetId) {
       return res.status(400).json({ 
         success: false, 
         message: 'Source and target IDs are required' 
+      });
+    }
+    
+    if (sourceId === targetId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot connect a card to itself' 
       });
     }
     
@@ -325,9 +377,10 @@ exports.createConnection = async (req, res) => {
       });
     }
     
-    // Check if user has access to the space
+    // Use the space from the cards themselves
     const cardSpaceId = sourceCard.spaceId || 'public';
     
+    // Check if user has access to the space
     if (cardSpaceId !== 'public') {
       try {
         const space = await Space.findById(cardSpaceId);
@@ -340,6 +393,7 @@ exports.createConnection = async (req, res) => {
         
         // Check if user has access to this space
         if (!space.hasAccess(userId)) {
+          console.log(`User ${userId} denied access to space ${cardSpaceId} for connection creation`);
           return res.status(403).json({ 
             success: false, 
             message: 'You do not have access to this space' 
@@ -354,14 +408,11 @@ exports.createConnection = async (req, res) => {
       }
     }
     
-    // Use spaceId from cards (already validated they're in the same space)
-    const connectionSpaceId = cardSpaceId;
-    
-    // Check if connection already exists (bidirectional check)
+    // Check if connection already exists (bidirectional)
     const existingConnection = await Connection.findOne({
-      spaceId: connectionSpaceId,
+      spaceId: cardSpaceId,
       $or: [
-        { sourceId, targetId },
+        { sourceId: sourceId, targetId: targetId },
         { sourceId: targetId, targetId: sourceId }
       ]
     });
@@ -369,39 +420,37 @@ exports.createConnection = async (req, res) => {
     if (existingConnection) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Connection already exists' 
+        message: 'Connection already exists between these cards' 
       });
     }
     
     // Generate a UUID for the connection
     const connectionId = uuidv4();
     
-    // Create new connection
-    const newConnection = new Connection({
-      _id: connectionId, // Use UUID as string ID
-      userId,
-      spaceId: connectionSpaceId,
+    const connection = new Connection({
+      _id: connectionId,
       sourceId,
       targetId,
-      label: label || null
+      label: label || '',
+      userId: userEmail, // Use email for connection ownership
+      spaceId: cardSpaceId
     });
     
-    console.log('Creating connection:', {
-      connectionId,
-      userId,
-      spaceId: connectionSpaceId,
-      sourceId,
-      targetId,
-      label: label || null
-    });
+    await connection.save();
     
-    await newConnection.save();
-    
-    console.log('Connection created successfully:', newConnection);
-    
-    res.status(201).json(newConnection);
+    console.log(`Successfully created connection ${connectionId} for user ${userId}/${userEmail} in space ${cardSpaceId}`);
+    res.status(201).json(connection);
   } catch (error) {
     console.error("Error creating connection:", error);
+    
+    // Handle duplicate connection error from pre-save hook
+    if (error.code === 'DUPLICATE_CONNECTION') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Connection already exists between these cards' 
+      });
+    }
+    
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -409,8 +458,11 @@ exports.createConnection = async (req, res) => {
 // Delete a connection
 exports.deleteConnection = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { id } = req.params;
+    
+    console.log(`User ${userId}/${userEmail} attempting to delete connection ${id}`);
     
     // Find the connection first to check permissions
     const connection = await Connection.findOne({ _id: id });
@@ -435,6 +487,7 @@ exports.deleteConnection = async (req, res) => {
         
         // Check if user has access to this space
         if (!space.hasAccess(userId)) {
+          console.log(`User ${userId} denied access to space ${connection.spaceId} for connection deletion`);
           return res.status(403).json({ 
             success: false, 
             message: 'You do not have permission to delete this connection' 
@@ -459,6 +512,7 @@ exports.deleteConnection = async (req, res) => {
       });
     }
     
+    console.log(`Successfully deleted connection ${id} for user ${userId}/${userEmail}`);
     res.json({ success: true, message: 'Connection deleted successfully' });
   } catch (error) {
     console.error("Error deleting connection:", error);
@@ -531,7 +585,8 @@ exports.saveCanvasState = async (req, res) => {
 // Update card positions
 exports.updateCardPositions = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { positions } = req.body;
     
     if (!Array.isArray(positions)) {
