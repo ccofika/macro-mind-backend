@@ -633,9 +633,18 @@ class WebSocketServer {
   }
 
   handleCardUpdated(ws, data) {
-    if (!ws.currentSpaceId) return;
+    if (!ws.currentSpaceId) {
+      console.warn(`Card update ignored - no current space for user ${ws.userId}`);
+      return;
+    }
     
-    console.log(`Card updated in space ${ws.currentSpaceId}:`, data.card.id);
+    console.log(`Card updated in space ${ws.currentSpaceId}:`, {
+      cardId: data.card.id,
+      cardTitle: data.card.title,
+      cardPosition: data.card.position,
+      userId: ws.userId,
+      userName: ws.userName
+    });
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
@@ -644,6 +653,8 @@ class WebSocketServer {
       userId: ws.userId,
       userName: ws.userName
     }, ws.userId);
+    
+    console.log(`Card update broadcasted to space ${ws.currentSpaceId} by user ${ws.userName}`);
   }
 
   handleCardDeleted(ws, data) {
