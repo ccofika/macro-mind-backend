@@ -147,6 +147,12 @@ class WebSocketServer {
       ws.userEmail = user.email;
       ws.userColor = this.assignUserColor(userId);
       
+      console.log('WebSocket: User data set:', { 
+        userId, 
+        userName: user.name, 
+        userColor: ws.userColor 
+      });
+      
       // Store socket reference
       this.userSockets.set(userId, ws);
       
@@ -160,6 +166,8 @@ class WebSocketServer {
         cursor: { x: 0, y: 0 },
         lastActivity: Date.now()
       });
+      
+      console.log('WebSocket: Total active users:', this.activeUsers.size);
       
       // Send success response
       ws.send(JSON.stringify({
@@ -213,15 +221,19 @@ class WebSocketServer {
           isPublic: true
         }));
         
+        // Broadcast to other users that this user joined
         this.broadcastToSpace('public', {
           type: 'user:join',
           userId: userId,
           userName: ws.userName,
           userColor: ws.userColor,
           timestamp: Date.now()
-        });
+        }, userId); // Exclude self from broadcast
         
+        // Send list of all users to the newly joined user
         this.sendUsersInSpace(ws, 'public');
+        
+        console.log(`Total users in public space: ${Array.from(this.userSpaces.values()).filter(s => s === 'public').length}`);
         console.log(`User ${userId} joined public space`);
         return;
       }
@@ -233,9 +245,10 @@ class WebSocketServer {
         return;
       }
       
-      // Check permissions
-      const isMember = space.members.some(member => member.userId === userId);
-      const isOwner = space.ownerId === userId;
+      // Check permissions (convert ObjectId to string for comparison)
+      const userIdStr = userId.toString();
+      const isMember = space.members.some(member => member.userId === userIdStr);
+      const isOwner = space.ownerId === userIdStr;
       
       if (!space.isPublic && !isMember && !isOwner) {
         this.sendError(ws, 'Access denied to this space');
@@ -253,17 +266,19 @@ class WebSocketServer {
         isPublic: space.isPublic
       }));
       
-      // Broadcast user join to ALL users in the space (not excluding the user)
+      // Broadcast user join to other users in the space (exclude self)
       this.broadcastToSpace(spaceId, {
         type: 'user:join',
         userId: userId,
         userName: ws.userName,
         userColor: ws.userColor,
         timestamp: Date.now()
-      });
+      }, userId);
       
       // Send current users list to the newly joined user
       this.sendUsersInSpace(ws, spaceId);
+      
+      console.log(`Total users in space ${spaceId}: ${Array.from(this.userSpaces.values()).filter(s => s === spaceId).length}`);
       console.log(`User ${userId} joined space ${spaceId}`);
       
     } catch (error) {
@@ -277,17 +292,19 @@ class WebSocketServer {
     
     const spaceId = ws.currentSpaceId;
     const userId = ws.userId;
+    const userName = ws.userName;
     
-    console.log(`User ${userId} leaving space ${spaceId}`);
+    console.log(`User ${userId} (${userName}) leaving space ${spaceId}`);
     
     // Remove from space mapping
     this.userSpaces.delete(userId);
     
-    // Broadcast user leave
+    // Broadcast user leave to ALL other users in the space
     this.broadcastToSpace(spaceId, {
       type: 'user:leave',
-      userId: userId
-    }, userId);
+      userId: userId,
+      userName: userName
+    });
     
     // Unlock any cards locked by this user
     this.lockedCards.forEach((lockUserId, cardId) => {
@@ -297,10 +314,12 @@ class WebSocketServer {
           type: 'card:unlocked',
           cardId: cardId
         });
+        console.log(`Unlocked card ${cardId} due to user ${userId} leaving space`);
       }
     });
     
     ws.currentSpaceId = null;
+    console.log(`User ${userId} successfully left space ${spaceId}`);
   }
   
   handleCursorMove(ws, data) {

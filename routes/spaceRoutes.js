@@ -10,10 +10,11 @@ router.get('/', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
     // Find spaces where user is owner or member
+    const userIdStr = userId.toString();
     const spaces = await Space.find({
       $or: [
-        { ownerId: userId },
-        { 'members.userId': userId }
+        { ownerId: userIdStr },
+        { 'members.userId': userIdStr }
       ]
     });
     
@@ -59,7 +60,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
     
     // Check if user is a member of the space or if the space is public
-    const isMember = space.members.some(member => member.userId === userId);
+    const userIdStr = userId.toString();
+    const isMember = space.members.some(member => member.userId === userIdStr);
     
     if (!isMember && !space.isPublic) {
       return res.status(403).json({ message: 'You do not have permission to access this space' });
@@ -88,7 +90,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const space = new Space({
       name,
       description: description || '',
-      ownerId: userId,
+      ownerId: userId.toString(),
       isPublic: isPublic || false
     });
     
@@ -119,7 +121,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId) {
+    if (space.ownerId !== userId.toString()) {
       return res.status(403).json({ message: 'You do not have permission to update this space' });
     }
     
@@ -150,7 +152,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId) {
+    if (space.ownerId !== userId.toString()) {
       return res.status(403).json({ message: 'You do not have permission to delete this space' });
     }
     
@@ -186,7 +188,7 @@ router.post('/:id/members', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId) {
+    if (space.ownerId !== userId.toString()) {
       return res.status(403).json({ message: 'You do not have permission to add members to this space' });
     }
     
@@ -237,7 +239,8 @@ router.delete('/:id/members/:memberId', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space or the member being removed
-    if (space.ownerId !== userId && userId !== memberIdToRemove) {
+    const userIdStr = userId.toString();
+    if (space.ownerId !== userIdStr && userIdStr !== memberIdToRemove) {
       return res.status(403).json({ message: 'You do not have permission to remove this member' });
     }
     
@@ -282,7 +285,7 @@ router.put('/:id/members/:memberId', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId) {
+    if (space.ownerId !== userId.toString()) {
       return res.status(403).json({ message: 'You do not have permission to update member roles' });
     }
     
