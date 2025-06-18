@@ -299,9 +299,9 @@ exports.createConnection = async (req, res) => {
       });
     }
     
-    // Check if cards exist and belong to the user
-    const sourceCard = await Card.findOne({ _id: sourceId, userId });
-    const targetCard = await Card.findOne({ _id: targetId, userId });
+    // Check if cards exist and user has access to them
+    const sourceCard = await Card.findOne({ _id: sourceId });
+    const targetCard = await Card.findOne({ _id: targetId });
     
     if (!sourceCard) {
       return res.status(404).json({ 
@@ -317,15 +317,53 @@ exports.createConnection = async (req, res) => {
       });
     }
     
-    // Use spaceId from cards if not provided (they should be in the same space)
-    const connectionSpaceId = spaceId || sourceCard.spaceId || 'public';
+    // Check if cards are in the same space
+    if (sourceCard.spaceId !== targetCard.spaceId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cards must be in the same space to connect' 
+      });
+    }
     
-    // Check if connection already exists
+    // Check if user has access to the space
+    const cardSpaceId = sourceCard.spaceId || 'public';
+    
+    if (cardSpaceId !== 'public') {
+      try {
+        const space = await Space.findById(cardSpaceId);
+        if (!space) {
+          return res.status(404).json({ 
+            success: false, 
+            message: 'Space not found' 
+          });
+        }
+        
+        // Check if user has access to this space
+        if (!space.hasAccess(userId)) {
+          return res.status(403).json({ 
+            success: false, 
+            message: 'You do not have access to this space' 
+          });
+        }
+      } catch (spaceError) {
+        console.error("Error checking space access:", spaceError);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Error checking space access' 
+        });
+      }
+    }
+    
+    // Use spaceId from cards (already validated they're in the same space)
+    const connectionSpaceId = cardSpaceId;
+    
+    // Check if connection already exists (bidirectional check)
     const existingConnection = await Connection.findOne({
-      userId,
       spaceId: connectionSpaceId,
-      sourceId,
-      targetId
+      $or: [
+        { sourceId, targetId },
+        { sourceId: targetId, targetId: sourceId }
+      ]
     });
     
     if (existingConnection) {
@@ -348,7 +386,18 @@ exports.createConnection = async (req, res) => {
       label: label || null
     });
     
+    console.log('Creating connection:', {
+      connectionId,
+      userId,
+      spaceId: connectionSpaceId,
+      sourceId,
+      targetId,
+      label: label || null
+    });
+    
     await newConnection.save();
+    
+    console.log('Connection created successfully:', newConnection);
     
     res.status(201).json(newConnection);
   } catch (error) {
@@ -363,13 +412,50 @@ exports.deleteConnection = async (req, res) => {
     const userId = req.user.email;
     const { id } = req.params;
     
-    // Find and delete the connection
-    const result = await Connection.deleteOne({ _id: id, userId });
+    // Find the connection first to check permissions
+    const connection = await Connection.findOne({ _id: id });
     
-    if (result.deletedCount === 0) {
+    if (!connection) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Connection not found or you do not have permission to delete it' 
+        message: 'Connection not found' 
+      });
+    }
+    
+    // Check if user has access to this space
+    if (connection.spaceId !== 'public') {
+      try {
+        const space = await Space.findById(connection.spaceId);
+        if (!space) {
+          return res.status(404).json({ 
+            success: false, 
+            message: 'Space not found' 
+          });
+        }
+        
+        // Check if user has access to this space
+        if (!space.hasAccess(userId)) {
+          return res.status(403).json({ 
+            success: false, 
+            message: 'You do not have permission to delete this connection' 
+          });
+        }
+      } catch (spaceError) {
+        console.error("Error checking space access:", spaceError);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Error checking space access' 
+        });
+      }
+    }
+    
+    // Delete the connection
+    const result = await Connection.deleteOne({ _id: id });
+    
+    if (result.deletedCount === 0) {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to delete connection' 
       });
     }
     

@@ -1,6 +1,89 @@
-# MacroMind Server
+# MacroMind Backend
 
-This is the server component of the MacroMind application, which provides the backend API for card management, user authentication, and AI text improvement.
+Backend server for MacroMind application built with Node.js, Express, and MongoDB.
+
+## Features
+
+- **Card Management**: Create, read, update, and delete cards
+- **Spaces**: Organize cards into collaborative spaces
+- **Real-time Collaboration**: WebSocket support for live collaboration
+- **AI-Powered Text Improvement**: Improve text using OpenAI API (with fallback support)
+- **Authentication**: JWT-based authentication with Google OAuth support
+- **MongoDB Integration**: Store cards, connections, and user data
+
+## Setup
+
+1. **Install Dependencies**
+   ```bash
+   npm install
+   ```
+
+2. **Environment Variables**
+   Create a `.env` file in the backend directory with the following variables:
+   ```env
+   # Database
+   MONGODB_URI=mongodb://localhost:27017/macro-mind
+   
+   # Authentication
+   JWT_SECRET=your-jwt-secret-key-here
+   
+   # AI Features (Optional - will use fallback if not provided)
+   OPENAI_API_KEY=your-openai-api-key-here
+   
+   # Server
+   PORT=5000
+   NODE_ENV=development
+   ```
+
+3. **Start the Server**
+   ```bash
+   npm start
+   ```
+
+## AI Features
+
+The AI functionality provides text improvement capabilities:
+
+- **OpenAI Integration**: Uses GPT-4o-mini for text improvement
+- **Fallback Support**: If OpenAI API key is not configured, uses local fallback transformations
+- **Improvement Types**: Supports formal, friendly, concise, and detailed text transformations
+
+### AI Endpoints
+
+- `POST /api/ai/improve` - Improve text using AI
+  - Requires authentication
+  - Request body: `{ originalText, improvements, systemPrompt?, userPrompt? }`
+  - Returns: `{ improvedText }`
+
+## Authentication
+
+All API endpoints (except auth routes) require JWT authentication:
+- Include token in Authorization header: `Bearer <token>`
+- Token obtained from login/register endpoints
+
+## Development
+
+Start in development mode with auto-reload:
+```bash
+npm run dev
+```
+
+## API Routes
+
+- `/api/auth` - Authentication (login, register, Google OAuth)
+- `/api/cards` - Card management
+- `/api/spaces` - Space management  
+- `/api/ai` - AI text improvement
+
+## WebSocket
+
+Real-time collaboration features available at `/ws` endpoint with authentication.
+
+## Error Handling
+
+- Comprehensive error handling for all routes
+- Fallback mechanisms for AI features
+- Proper HTTP status codes and error messages
 
 ## MongoDB Migration
 

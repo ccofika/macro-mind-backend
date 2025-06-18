@@ -748,7 +748,7 @@ class WebSocketServer {
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'card:created',
+      type: 'cardCreated',
       card: data.card,
       userId: ws.userId,
       userName: ws.userName
@@ -771,7 +771,7 @@ class WebSocketServer {
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'card:updated',
+      type: 'cardUpdated',
       card: data.card,
       userId: ws.userId,
       userName: ws.userName
@@ -787,7 +787,7 @@ class WebSocketServer {
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'card:deleted',
+      type: 'cardDeleted',
       cardId: data.cardId,
       userId: ws.userId,
       userName: ws.userName
@@ -801,7 +801,7 @@ class WebSocketServer {
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'connection:created',
+      type: 'connectionCreated',
       connection: data.connection,
       userId: ws.userId,
       userName: ws.userName
@@ -815,7 +815,7 @@ class WebSocketServer {
     
     // Broadcast to all users in the same space except the sender
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'connection:deleted',
+      type: 'connectionDeleted',
       connectionId: data.connectionId,
       userId: ws.userId,
       userName: ws.userName
