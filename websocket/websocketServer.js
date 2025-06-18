@@ -171,8 +171,7 @@ class WebSocketServer {
       
       console.log('Authentication successful for:', user.name);
       
-      // Auto-join public space
-      await this.handleSpaceJoin(ws, { spaceId: 'public' });
+      // Don't auto-join public space - let frontend decide which space to join
       
     } catch (error) {
       console.error('Authentication error:', error);
@@ -187,9 +186,19 @@ class WebSocketServer {
       
       console.log(`User ${userId} joining space ${spaceId}`);
       
-      // Leave current space if any
-      if (ws.currentSpaceId) {
+      // Leave current space if any (but don't broadcast if joining the same space)
+      if (ws.currentSpaceId && ws.currentSpaceId !== spaceId) {
         this.handleSpaceLeave(ws);
+      } else if (ws.currentSpaceId === spaceId) {
+        // Already in this space, just send confirmation
+        ws.send(JSON.stringify({
+          type: 'space:joined',
+          spaceId: spaceId,
+          name: spaceId === 'public' ? 'Public Space' : 'Space',
+          isPublic: spaceId === 'public'
+        }));
+        this.sendUsersInSpace(ws, spaceId);
+        return;
       }
       
       // Handle public space
@@ -210,7 +219,7 @@ class WebSocketServer {
           userName: ws.userName,
           userColor: ws.userColor,
           timestamp: Date.now()
-        }, userId);
+        });
         
         this.sendUsersInSpace(ws, 'public');
         console.log(`User ${userId} joined public space`);
@@ -244,14 +253,16 @@ class WebSocketServer {
         isPublic: space.isPublic
       }));
       
+      // Broadcast user join to ALL users in the space (not excluding the user)
       this.broadcastToSpace(spaceId, {
         type: 'user:join',
         userId: userId,
         userName: ws.userName,
         userColor: ws.userColor,
         timestamp: Date.now()
-      }, userId);
+      });
       
+      // Send current users list to the newly joined user
       this.sendUsersInSpace(ws, spaceId);
       console.log(`User ${userId} joined space ${spaceId}`);
       
@@ -367,27 +378,55 @@ class WebSocketServer {
     if (!ws.userId) return;
     
     const userId = ws.userId;
-    console.log(`User ${userId} disconnected`);
+    const userName = ws.userName;
+    console.log(`User ${userId} (${userName}) disconnected`);
     
     // Leave current space
     this.handleSpaceLeave(ws);
     
-    // Remove from active users
+    // Remove from active users and sockets
     this.activeUsers.delete(userId);
     this.userSockets.delete(userId);
+    this.userSpaces.delete(userId);
+    
+    // Clean up any card locks by this user
+    this.lockedCards.forEach((lockUserId, cardId) => {
+      if (lockUserId === userId) {
+        this.lockedCards.delete(cardId);
+        console.log(`Unlocked card ${cardId} due to user ${userId} disconnect`);
+      }
+    });
+    
+    console.log(`Cleaned up all data for disconnected user ${userId}`);
   }
   
   broadcastToSpace(spaceId, message, excludeUserId = null) {
     const messageStr = JSON.stringify(message);
+    let sentCount = 0;
+    
+    // Only log non-cursor messages to avoid console spam
+    if (message.type !== 'cursor:move') {
+      console.log(`Broadcasting to space ${spaceId}:`, message.type, excludeUserId ? `(excluding ${excludeUserId})` : '(to all)');
+    }
     
     this.userSpaces.forEach((userSpaceId, userId) => {
       if (userSpaceId === spaceId && userId !== excludeUserId) {
         const ws = this.userSockets.get(userId);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(messageStr);
+          sentCount++;
+          if (message.type !== 'cursor:move') {
+            console.log(`  -> Sent to user ${userId}`);
+          }
+        } else if (message.type !== 'cursor:move') {
+          console.log(`  -> Failed to send to user ${userId} (socket not ready)`);
         }
       }
     });
+    
+    if (message.type !== 'cursor:move') {
+      console.log(`Broadcast sent to ${sentCount} users in space ${spaceId}`);
+    }
   }
   
   sendUsersInSpace(ws, spaceId) {
