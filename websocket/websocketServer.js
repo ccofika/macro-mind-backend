@@ -89,6 +89,9 @@ class WebSocketServer {
             case 'card:deselect':
               this.handleCardDeselect(ws, data);
               break;
+            case 'canvas:clearSelection':
+              this.handleCanvasClearSelection(ws, data);
+              break;
             case 'card:created':
               this.handleCardCreated(ws, data);
               break;
@@ -240,6 +243,12 @@ class WebSocketServer {
         // Send list of all users to the newly joined user
         this.sendUsersInSpace(ws, 'public');
         
+        // Send current lock states to the newly joined user
+        this.sendLockStates(ws, 'public');
+        
+        // Send current selection states to the newly joined user
+        this.sendSelectionStates(ws, 'public');
+        
         console.log(`Total users in public space: ${Array.from(this.userSpaces.values()).filter(s => s === 'public').length}`);
         console.log(`User ${userId} joined public space`);
         return;
@@ -285,6 +294,12 @@ class WebSocketServer {
       
       // Send current users list to the newly joined user
       this.sendUsersInSpace(ws, spaceId);
+      
+      // Send current lock states to the newly joined user
+      this.sendLockStates(ws, spaceId);
+      
+      // Send current selection states to the newly joined user
+      this.sendSelectionStates(ws, spaceId);
       
       console.log(`Total users in space ${spaceId}: ${Array.from(this.userSpaces.values()).filter(s => s === spaceId).length}`);
       console.log(`User ${userId} joined space ${spaceId}`);
@@ -495,6 +510,42 @@ class WebSocketServer {
     });
   }
   
+  handleCanvasClearSelection(ws, data) {
+    if (!ws.currentSpaceId || !ws.userId) return;
+    
+    const userId = ws.userId;
+    
+    console.log(`User ${userId} clearing all selections in space ${ws.currentSpaceId}`);
+    
+    // Get user's currently selected card
+    const selectedCardId = this.selectedCards.get(userId);
+    
+    if (selectedCardId) {
+      // Deselect user's card
+      this.selectedCards.delete(userId);
+      
+      // Unlock the card if it was locked by this user
+      if (this.lockedCards.get(selectedCardId) === userId) {
+        this.lockedCards.delete(selectedCardId);
+        
+        this.broadcastToSpace(ws.currentSpaceId, {
+          type: 'card:unlocked',
+          cardId: selectedCardId
+        });
+      }
+      
+      // Broadcast deselection
+      this.broadcastToSpace(ws.currentSpaceId, {
+        type: 'card:deselected',
+        cardId: selectedCardId,
+        userId: userId,
+        userName: ws.userName
+      });
+      
+      console.log(`User ${userId} cleared selection of card ${selectedCardId}`);
+    }
+  }
+  
   handleDisconnect(ws) {
     if (!ws.userId) {
       console.log('WebSocket: Disconnect called for unauthenticated connection');
@@ -593,6 +644,78 @@ class WebSocketServer {
       type: 'users:list',
       users: users
     }));
+  }
+  
+  sendLockStates(ws, spaceId) {
+    const lockStates = [];
+    
+    // Get users in this space
+    const usersInSpace = new Set();
+    this.userSpaces.forEach((userSpaceId, userId) => {
+      if (userSpaceId === spaceId) {
+        usersInSpace.add(userId);
+      }
+    });
+    
+    // Find locked cards by users in this space
+    this.lockedCards.forEach((lockUserId, cardId) => {
+      if (usersInSpace.has(lockUserId)) {
+        const user = this.activeUsers.get(lockUserId);
+        if (user) {
+          lockStates.push({
+            cardId: cardId,
+            userId: lockUserId,
+            userName: user.name,
+            userColor: user.color
+          });
+        }
+      }
+    });
+    
+    console.log(`WebSocket: Sending ${lockStates.length} lock states to newly joined user in space ${spaceId}`);
+    
+    if (lockStates.length > 0) {
+      ws.send(JSON.stringify({
+        type: 'locks:list',
+        locks: lockStates
+      }));
+    }
+  }
+  
+  sendSelectionStates(ws, spaceId) {
+    const selectionStates = [];
+    
+    // Get users in this space
+    const usersInSpace = new Set();
+    this.userSpaces.forEach((userSpaceId, userId) => {
+      if (userSpaceId === spaceId) {
+        usersInSpace.add(userId);
+      }
+    });
+    
+    // Find selected cards by users in this space
+    this.selectedCards.forEach((cardId, userId) => {
+      if (usersInSpace.has(userId)) {
+        const user = this.activeUsers.get(userId);
+        if (user) {
+          selectionStates.push({
+            cardId: cardId,
+            userId: userId,
+            userName: user.name,
+            userColor: user.color
+          });
+        }
+      }
+    });
+    
+    console.log(`WebSocket: Sending ${selectionStates.length} selection states to newly joined user in space ${spaceId}`);
+    
+    if (selectionStates.length > 0) {
+      ws.send(JSON.stringify({
+        type: 'selections:list',
+        selections: selectionStates
+      }));
+    }
   }
   
   assignUserColor(userId) {
