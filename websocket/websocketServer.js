@@ -14,6 +14,7 @@ class WebSocketServer {
     this.userSockets = new Map(); // userId -> WebSocket
     this.lockedCards = new Map(); // cardId -> userId
     this.userSpaces = new Map(); // userId -> spaceId
+    this.selectedCards = new Map(); // userId -> cardId (only one card per user)
     this.userColors = [
       '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', 
       '#FFA69E', '#9CAFB7', '#E4C3AD', '#B8F2E6',
@@ -81,6 +82,12 @@ class WebSocketServer {
               break;
             case 'card:unlock':
               this.handleCardUnlock(ws, data);
+              break;
+            case 'card:select':
+              this.handleCardSelect(ws, data);
+              break;
+            case 'card:deselect':
+              this.handleCardDeselect(ws, data);
               break;
             case 'card:created':
               this.handleCardCreated(ws, data);
@@ -300,6 +307,9 @@ class WebSocketServer {
     // Remove from space mapping
     this.userSpaces.delete(userId);
     
+    // Clear selected card for this user
+    this.selectedCards.delete(userId);
+    
     // Broadcast user leave to ALL other users in the space
     this.broadcastToSpace(spaceId, {
       type: 'user:leave',
@@ -393,6 +403,97 @@ class WebSocketServer {
       cardId: cardId
     });
   }
+
+  handleCardSelect(ws, data) {
+    if (!ws.currentSpaceId || !ws.userId) return;
+    
+    const { cardId } = data;
+    const userId = ws.userId;
+    
+    console.log(`User ${userId} selecting card ${cardId} in space ${ws.currentSpaceId}`);
+    
+    // Check if user already has a selected card
+    const currentSelected = this.selectedCards.get(userId);
+    if (currentSelected && currentSelected !== cardId) {
+      // Deselect previous card first
+      this.selectedCards.delete(userId);
+      
+      // Broadcast deselection of previous card
+      this.broadcastToSpace(ws.currentSpaceId, {
+        type: 'card:deselected',
+        cardId: currentSelected,
+        userId: userId,
+        userName: ws.userName
+      });
+      
+      // Also unlock the previous card
+      if (this.lockedCards.get(currentSelected) === userId) {
+        this.lockedCards.delete(currentSelected);
+        this.broadcastToSpace(ws.currentSpaceId, {
+          type: 'card:unlocked',
+          cardId: currentSelected
+        });
+      }
+    }
+    
+    // Select new card
+    this.selectedCards.set(userId, cardId);
+    
+    // Lock the card
+    this.lockedCards.set(cardId, userId);
+    
+    // Broadcast selection and lock
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:selected',
+      cardId: cardId,
+      userId: userId,
+      userName: ws.userName,
+      userColor: ws.userColor
+    });
+    
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:locked',
+      cardId: cardId,
+      userId: userId,
+      userName: ws.userName,
+      userColor: ws.userColor
+    });
+  }
+
+  handleCardDeselect(ws, data) {
+    if (!ws.currentSpaceId || !ws.userId) return;
+    
+    const { cardId } = data;
+    const userId = ws.userId;
+    
+    console.log(`User ${userId} deselecting card ${cardId} in space ${ws.currentSpaceId}`);
+    
+    // Check if this card is selected by this user
+    if (this.selectedCards.get(userId) !== cardId) {
+      return; // Silently ignore
+    }
+    
+    // Deselect card
+    this.selectedCards.delete(userId);
+    
+    // Unlock card
+    if (this.lockedCards.get(cardId) === userId) {
+      this.lockedCards.delete(cardId);
+      
+      this.broadcastToSpace(ws.currentSpaceId, {
+        type: 'card:unlocked',
+        cardId: cardId
+      });
+    }
+    
+    // Broadcast deselection
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:deselected',
+      cardId: cardId,
+      userId: userId,
+      userName: ws.userName
+    });
+  }
   
   handleDisconnect(ws) {
     if (!ws.userId) {
@@ -413,6 +514,7 @@ class WebSocketServer {
     this.activeUsers.delete(userId);
     this.userSockets.delete(userId);
     this.userSpaces.delete(userId);
+    this.selectedCards.delete(userId);
     
     // Clean up any card locks by this user
     let unlockedCards = 0;

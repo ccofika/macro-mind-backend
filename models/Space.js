@@ -82,6 +82,83 @@ spaceSchema.pre('save', function(next) {
   next();
 });
 
+// Instance methods for Space
+spaceSchema.methods.hasAccess = function(userId) {
+  const userIdStr = userId.toString();
+  
+  // Public spaces are accessible to everyone
+  if (this.isPublic) {
+    return true;
+  }
+  
+  // Owner has access
+  if (this.ownerId === userIdStr) {
+    return true;
+  }
+  
+  // Check if user is a member
+  return this.members.some(member => member.userId === userIdStr);
+};
+
+spaceSchema.methods.isOwner = function(userId) {
+  const userIdStr = userId.toString();
+  return this.ownerId === userIdStr;
+};
+
+spaceSchema.methods.getUserRole = function(userId) {
+  const userIdStr = userId.toString();
+  
+  // Check if user is owner
+  if (this.ownerId === userIdStr) {
+    return 'owner';
+  }
+  
+  // Find user in members array
+  const member = this.members.find(member => member.userId === userIdStr);
+  return member ? member.role : null;
+};
+
+spaceSchema.methods.addMember = function(userId, role = 'viewer') {
+  const userIdStr = userId.toString();
+  
+  // Check if user is already a member
+  const existingMemberIndex = this.members.findIndex(member => member.userId === userIdStr);
+  
+  if (existingMemberIndex !== -1) {
+    // Update existing member's role
+    this.members[existingMemberIndex].role = role;
+  } else {
+    // Add new member
+    this.members.push({
+      userId: userIdStr,
+      role: role,
+      addedAt: new Date()
+    });
+  }
+};
+
+spaceSchema.methods.removeMember = function(userId) {
+  const userIdStr = userId.toString();
+  
+  // Cannot remove owner
+  if (this.ownerId === userIdStr) {
+    throw new Error('Cannot remove the owner of the space');
+  }
+  
+  // Remove member from array
+  this.members = this.members.filter(member => member.userId !== userIdStr);
+};
+
+spaceSchema.methods.canUserEdit = function(userId) {
+  const userIdStr = userId.toString();
+  const role = this.getUserRole(userIdStr);
+  return role === 'owner' || role === 'editor';
+};
+
+spaceSchema.methods.canUserView = function(userId) {
+  return this.hasAccess(userId);
+};
+
 const Space = mongoose.model('Space', spaceSchema);
 
 module.exports = Space; 
