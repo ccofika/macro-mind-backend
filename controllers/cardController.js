@@ -96,29 +96,63 @@ exports.updateCard = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
     
-    // Find card and ensure it belongs to the user
-    const card = await Card.findOne({ _id: id, userId });
+    console.log(`User ${userId} attempting to update card ${id} with:`, updates);
+    
+    // Find card first
+    const card = await Card.findOne({ _id: id });
     
     if (!card) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Card not found or you do not have permission to edit it' 
+        message: 'Card not found' 
+      });
+    }
+    
+    // Check if user has permission to update this card
+    let hasPermission = false;
+    
+    if (card.spaceId === 'public' || card.userId === userId) {
+      hasPermission = true;
+    } else if (card.spaceId && card.spaceId !== 'public') {
+      // For private space cards, check if user has access to the space
+      try {
+        const space = await Space.findById(card.spaceId);
+        if (space) {
+          const hasAccess = space.hasAccess(userId);
+          if (hasAccess && space.canUserEdit(userId)) {
+            hasPermission = true;
+          }
+        }
+      } catch (spaceError) {
+        console.error(`Error checking space permissions for card ${id}:`, spaceError);
+      }
+    }
+    
+    if (!hasPermission) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You do not have permission to edit this card' 
       });
     }
     
     // Update card with new information
     Object.keys(updates).forEach(key => {
-      if (key !== '_id' && key !== 'userId') {
+      if (key !== '_id' && key !== 'userId' && key !== 'spaceId') {
         card[key] = updates[key];
       }
     });
     
     // Ensure position is valid
-    if (!card.position || typeof card.position !== 'object') {
+    if (card.position && typeof card.position !== 'object') {
       card.position = { x: 0, y: 0 };
     }
     
+    // Update the updatedAt timestamp
+    card.updatedAt = new Date();
+    
     await card.save();
+    
+    console.log(`Successfully updated card ${id} for user ${userId}`);
     res.json(card);
   } catch (error) {
     console.error("Error updating card:", error);
@@ -421,25 +455,81 @@ exports.updateCardPositions = async (req, res) => {
       });
     }
     
-    console.log(`Updating positions for ${positions.length} cards`);
+    console.log(`Updating positions for ${positions.length} cards for user ${userId}`);
     
     // Update each card's position in the database
-    const updatePromises = positions.map(item => {
+    const updatePromises = positions.map(async (item) => {
       if (!item.id || !item.position) {
         console.log(`Skipping invalid position update: ${JSON.stringify(item)}`);
-        return Promise.resolve();
+        return null;
       }
       
       console.log(`Updating card ${item.id} to position:`, item.position);
       
-      return Card.findOneAndUpdate(
-        { _id: item.id, userId },
-        { $set: { position: item.position } },
-        { new: true }
-      ).catch(err => {
+      try {
+        // First find the card to check permissions
+        const card = await Card.findOne({ _id: item.id });
+        
+        if (!card) {
+          console.log(`Card ${item.id} not found`);
+          return null;
+        }
+        
+        // Check if user has permission to update this card
+        // For public space cards or if user is the owner
+        if (card.spaceId === 'public' || card.userId === userId) {
+          const updatedCard = await Card.findOneAndUpdate(
+            { _id: item.id },
+            { 
+              $set: { 
+                position: item.position,
+                updatedAt: new Date()
+              } 
+            },
+            { new: true }
+          );
+          
+          console.log(`Successfully updated card ${item.id} position`);
+          return updatedCard;
+        } else {
+          // For private space cards, check if user has access to the space
+          if (card.spaceId && card.spaceId !== 'public') {
+            try {
+              const space = await Space.findById(card.spaceId);
+              if (space) {
+                const hasAccess = space.hasAccess(userId);
+                if (hasAccess && space.canUserEdit(userId)) {
+                  const updatedCard = await Card.findOneAndUpdate(
+                    { _id: item.id },
+                    { 
+                      $set: { 
+                        position: item.position,
+                        updatedAt: new Date()
+                      } 
+                    },
+                    { new: true }
+                  );
+                  
+                  console.log(`Successfully updated card ${item.id} position in space ${card.spaceId}`);
+                  return updatedCard;
+                } else {
+                  console.log(`User ${userId} does not have edit access to space ${card.spaceId}`);
+                  return null;
+                }
+              }
+            } catch (spaceError) {
+              console.error(`Error checking space permissions for card ${item.id}:`, spaceError);
+              return null;
+            }
+          }
+          
+          console.log(`User ${userId} does not have permission to update card ${item.id}`);
+          return null;
+        }
+      } catch (err) {
         console.error(`Error updating card ${item.id}:`, err);
         return null;
-      });
+      }
     });
     
     const results = await Promise.all(updatePromises);
@@ -449,7 +539,9 @@ exports.updateCardPositions = async (req, res) => {
     
     res.json({ 
       success: true, 
-      message: `Updated ${successCount} card positions` 
+      message: `Updated ${successCount} card positions`,
+      updated: successCount,
+      total: positions.length
     });
   } catch (error) {
     console.error("Error updating card positions:", error);
