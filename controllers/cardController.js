@@ -689,3 +689,137 @@ exports.updateCardPositions = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Search cards across spaces with advanced filtering
+exports.searchCards = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { query, spaceId, limit = 20, searchMode = 'global' } = req.query;
+    
+    console.log(`User ${userId} searching for "${query}" in mode ${searchMode}`);
+    
+    if (!query || query.trim() === '') {
+      return res.json([]);
+    }
+    
+    const searchTerm = query.trim();
+    let searchQuery = {};
+    
+    if (searchMode === 'local' && spaceId) {
+      // Local search - within specific space
+      if (spaceId === 'public') {
+        searchQuery = { spaceId: 'public' };
+      } else {
+        // Check if user has access to the space
+        try {
+          const space = await Space.findById(spaceId);
+          if (!space || !space.hasAccess(userId)) {
+            return res.status(403).json({ 
+              success: false, 
+              message: 'Access denied to this space' 
+            });
+          }
+          searchQuery = { spaceId: spaceId };
+        } catch (spaceError) {
+          console.error("Error checking space access for search:", spaceError);
+          return res.status(500).json({ 
+            success: false, 
+            message: 'Error checking space access' 
+          });
+        }
+      }
+    } else {
+      // Global search - across all accessible spaces
+      const userIdStr = userId.toString();
+      
+      // Get all spaces user has access to
+      const accessibleSpaces = await Space.find({
+        $or: [
+          { ownerId: userIdStr },
+          { 'members.userId': userIdStr },
+          { isPublic: true }
+        ]
+      });
+      
+      const spaceIds = ['public', ...accessibleSpaces.map(space => space._id.toString())];
+      
+      searchQuery = {
+        $or: [
+          { spaceId: 'public' },
+          { spaceId: { $in: spaceIds } }
+        ]
+      };
+    }
+    
+    // Add text search criteria with MongoDB text search or regex
+    const textSearchQuery = {
+      $and: [
+        searchQuery,
+        {
+          $or: [
+            { title: { $regex: searchTerm, $options: 'i' } },
+            { content: { $regex: searchTerm, $options: 'i' } }
+          ]
+        }
+      ]
+    };
+    
+    // Execute search with sorting by relevance
+    const cards = await Card.find(textSearchQuery)
+      .limit(parseInt(limit))
+      .sort({
+        // Prioritize category cards
+        type: 1,
+        // Then sort by creation date (newest first)
+        createdAt: -1
+      });
+    
+    // Calculate relevance scores
+    const scoredResults = cards.map(card => {
+      let score = 0;
+      const titleLower = card.title.toLowerCase();
+      const contentLower = (card.content || '').toLowerCase();
+      const termLower = searchTerm.toLowerCase();
+      
+      // Category cards get 3x multiplier
+      if (card.type === 'category') score += 30;
+      
+      // Title matches get highest priority
+      if (titleLower.includes(termLower)) {
+        score += 20;
+        // Exact match gets maximum priority
+        if (titleLower === termLower) score += 30;
+        // Starts with term gets high priority
+        if (titleLower.startsWith(termLower)) score += 15;
+      }
+      
+      // Content matches get medium priority
+      if (contentLower.includes(termLower)) {
+        score += 10;
+      }
+      
+      return {
+        ...card.toJSON(),
+        relevanceScore: score
+      };
+    });
+    
+    // Sort by relevance score
+    const sortedResults = scoredResults.sort((a, b) => {
+      if (b.relevanceScore !== a.relevanceScore) {
+        return b.relevanceScore - a.relevanceScore;
+      }
+      return a.title.localeCompare(b.title);
+    });
+    
+    console.log(`Found ${sortedResults.length} search results for "${searchTerm}"`);
+    res.json(sortedResults);
+    
+  } catch (error) {
+    console.error("Error searching cards:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Search failed: ' + error.message 
+    });
+  }
+};
