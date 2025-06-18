@@ -41,6 +41,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const spaceId = req.params.id;
     const userId = req.user.id;
     
+    console.log(`Getting space ${spaceId} for user ${userId}`);
+    
     // Handle public space
     if (spaceId === 'public') {
       return res.json({
@@ -56,17 +58,18 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const space = await Space.findById(spaceId);
     
     if (!space) {
+      console.log(`Space ${spaceId} not found`);
       return res.status(404).json({ message: 'Space not found' });
     }
     
-    // Check if user is a member of the space or if the space is public
-    const userIdStr = userId.toString();
-    const isMember = space.members.some(member => member.userId === userIdStr);
-    
-    if (!isMember && !space.isPublic) {
+    // Use helper method for access check
+    if (!space.hasAccess(userId)) {
+      console.log(`User ${userId} denied access to space ${spaceId}`);
+      console.log(`Space isPublic: ${space.isPublic}, ownerId: ${space.ownerId}, members:`, space.members);
       return res.status(403).json({ message: 'You do not have permission to access this space' });
     }
     
+    console.log(`User ${userId} granted access to space ${spaceId}`);
     res.json(space);
   } catch (error) {
     console.error('Error getting space:', error);
@@ -121,7 +124,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId.toString()) {
+    if (!space.isOwner(userId)) {
       return res.status(403).json({ message: 'You do not have permission to update this space' });
     }
     
@@ -188,7 +191,7 @@ router.post('/:id/members', authenticateToken, async (req, res) => {
     }
     
     // Check if user is the owner of the space
-    if (space.ownerId !== userId.toString()) {
+    if (!space.isOwner(userId)) {
       return res.status(403).json({ message: 'You do not have permission to add members to this space' });
     }
     
@@ -201,20 +204,8 @@ router.post('/:id/members', authenticateToken, async (req, res) => {
     
     const memberUserId = memberUser._id.toString();
     
-    // Check if user is already a member
-    const existingMember = space.members.find(member => member.userId === memberUserId);
-    
-    if (existingMember) {
-      // Update role if already a member
-      existingMember.role = role;
-    } else {
-      // Add new member
-      space.members.push({
-        userId: memberUserId,
-        role,
-        addedAt: new Date()
-      });
-    }
+    // Use helper method to add member
+    space.addMember(memberUserId, role);
     
     await space.save();
     

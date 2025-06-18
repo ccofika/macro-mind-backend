@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "migrate": "node utils/migrateToMongo.js"
+    "migrate": "node utils/migrateToMongo.js",
+    "migrate-spaces": "node scripts/migrateSpaceData.js",
+    "test-permissions": "node scripts/testSpacePermissions.js"
   },
   "keywords": [],
   "author": "",

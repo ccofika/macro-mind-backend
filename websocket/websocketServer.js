@@ -241,19 +241,20 @@ class WebSocketServer {
       // Handle private spaces
       const space = await Space.findById(spaceId);
       if (!space) {
+        console.log(`WebSocket: Space ${spaceId} not found`);
         this.sendError(ws, 'Space not found');
         return;
       }
       
-      // Check permissions (convert ObjectId to string for comparison)
-      const userIdStr = userId.toString();
-      const isMember = space.members.some(member => member.userId === userIdStr);
-      const isOwner = space.ownerId === userIdStr;
-      
-      if (!space.isPublic && !isMember && !isOwner) {
+      // Check permissions using helper method
+      if (!space.hasAccess(userId)) {
+        console.log(`WebSocket: User ${userId} denied access to space ${spaceId}`);
+        console.log(`WebSocket: Space details - isPublic: ${space.isPublic}, ownerId: ${space.ownerId}, members:`, space.members.map(m => ({ userId: m.userId, role: m.role })));
         this.sendError(ws, 'Access denied to this space');
         return;
       }
+      
+      console.log(`WebSocket: User ${userId} granted access to space ${spaceId}`);
       
       // Join the space
       ws.currentSpaceId = spaceId;
@@ -394,29 +395,43 @@ class WebSocketServer {
   }
   
   handleDisconnect(ws) {
-    if (!ws.userId) return;
+    if (!ws.userId) {
+      console.log('WebSocket: Disconnect called for unauthenticated connection');
+      return;
+    }
     
     const userId = ws.userId;
     const userName = ws.userName;
-    console.log(`User ${userId} (${userName}) disconnected`);
+    const currentSpace = ws.currentSpaceId;
     
-    // Leave current space
+    console.log(`WebSocket: User ${userId} (${userName}) disconnected from space ${currentSpace || 'none'}`);
+    
+    // Leave current space first
     this.handleSpaceLeave(ws);
     
-    // Remove from active users and sockets
+    // Remove from all mappings
     this.activeUsers.delete(userId);
     this.userSockets.delete(userId);
     this.userSpaces.delete(userId);
     
     // Clean up any card locks by this user
+    let unlockedCards = 0;
     this.lockedCards.forEach((lockUserId, cardId) => {
       if (lockUserId === userId) {
         this.lockedCards.delete(cardId);
-        console.log(`Unlocked card ${cardId} due to user ${userId} disconnect`);
+        unlockedCards++;
+        
+        // Broadcast unlock to all users in the current space
+        if (currentSpace) {
+          this.broadcastToSpace(currentSpace, {
+            type: 'card:unlocked',
+            cardId: cardId
+          });
+        }
       }
     });
     
-    console.log(`Cleaned up all data for disconnected user ${userId}`);
+    console.log(`WebSocket: Cleaned up user ${userId} - unlocked ${unlockedCards} cards, active users: ${this.activeUsers.size}, total spaces: ${this.userSpaces.size}`);
   }
   
   broadcastToSpace(spaceId, message, excludeUserId = null) {
@@ -450,9 +465,11 @@ class WebSocketServer {
   
   sendUsersInSpace(ws, spaceId) {
     const users = [];
+    let totalInSpace = 0;
     
     this.userSpaces.forEach((userSpaceId, userId) => {
       if (userSpaceId === spaceId) {
+        totalInSpace++;
         const user = this.activeUsers.get(userId);
         if (user) {
           users.push({
@@ -460,11 +477,15 @@ class WebSocketServer {
             name: user.name,
             color: user.color,
             picture: user.picture,
-            cursor: user.cursor
+            cursor: user.cursor || { x: 0, y: 0 }
           });
+        } else {
+          console.warn(`WebSocket: User ${userId} in space ${spaceId} but not in activeUsers`);
         }
       }
     });
+    
+    console.log(`WebSocket: Sending ${users.length} users to newly joined user in space ${spaceId} (total mapped: ${totalInSpace})`);
     
     ws.send(JSON.stringify({
       type: 'users:list',

@@ -11,7 +11,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const generateToken = (user) => {
   return jwt.sign(
     { 
-      id: user._id,
+      id: user._id.toString(), // Convert ObjectId to string for consistency
       email: user.email,
       name: user.name
     },
