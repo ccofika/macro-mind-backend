@@ -10,6 +10,12 @@ const connectionSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  spaceId: {
+    type: String,
+    required: true,
+    default: 'public',
+    index: true
+  },
   sourceId: {
     type: String,
     required: true
@@ -42,7 +48,7 @@ const connectionSchema = new mongoose.Schema({
 });
 
 // Create compound index for faster queries and to ensure uniqueness
-connectionSchema.index({ userId: 1, sourceId: 1, targetId: 1 }, { unique: true });
+connectionSchema.index({ userId: 1, spaceId: 1, sourceId: 1, targetId: 1 }, { unique: true });
 
 const Connection = mongoose.model('Connection', connectionSchema);
 

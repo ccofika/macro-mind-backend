@@ -7,7 +7,15 @@ const User = require('../models/User');
 exports.getAllCards = async (req, res) => {
   try {
     const userId = req.user.email;
-    const cards = await Card.find({ userId });
+    const { spaceId } = req.query;
+    
+    // Build query
+    const query = { userId };
+    if (spaceId) {
+      query.spaceId = spaceId;
+    }
+    
+    const cards = await Card.find(query);
     res.json(cards);
   } catch (error) {
     console.error("Error fetching cards:", error);
@@ -19,7 +27,7 @@ exports.getAllCards = async (req, res) => {
 exports.createCard = async (req, res) => {
   try {
     const userId = req.user.email;
-    const { type, title, content, position } = req.body;
+    const { type, title, content, position, spaceId } = req.body;
     
     if (!type || !title) {
       return res.status(400).json({ 
@@ -34,6 +42,7 @@ exports.createCard = async (req, res) => {
     const newCard = new Card({
       _id: cardId, // Use UUID as string ID
       userId,
+      spaceId: spaceId || 'public', // Default to public space
       type,
       title,
       content: content || null,
@@ -167,7 +176,15 @@ exports.deleteMultipleCards = async (req, res) => {
 exports.getAllConnections = async (req, res) => {
   try {
     const userId = req.user.email;
-    const connections = await Connection.find({ userId });
+    const { spaceId } = req.query;
+    
+    // Build query
+    const query = { userId };
+    if (spaceId) {
+      query.spaceId = spaceId;
+    }
+    
+    const connections = await Connection.find(query);
     res.json(connections);
   } catch (error) {
     console.error("Error fetching connections:", error);
@@ -179,7 +196,7 @@ exports.getAllConnections = async (req, res) => {
 exports.createConnection = async (req, res) => {
   try {
     const userId = req.user.email;
-    const { sourceId, targetId, label } = req.body;
+    const { sourceId, targetId, label, spaceId } = req.body;
     
     if (!sourceId || !targetId) {
       return res.status(400).json({ 
@@ -206,9 +223,13 @@ exports.createConnection = async (req, res) => {
       });
     }
     
+    // Use spaceId from cards if not provided (they should be in the same space)
+    const connectionSpaceId = spaceId || sourceCard.spaceId || 'public';
+    
     // Check if connection already exists
     const existingConnection = await Connection.findOne({
       userId,
+      spaceId: connectionSpaceId,
       sourceId,
       targetId
     });
@@ -227,6 +248,7 @@ exports.createConnection = async (req, res) => {
     const newConnection = new Connection({
       _id: connectionId, // Use UUID as string ID
       userId,
+      spaceId: connectionSpaceId,
       sourceId,
       targetId,
       label: label || null

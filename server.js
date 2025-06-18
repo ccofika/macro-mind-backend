@@ -1,16 +1,22 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
 const cardRoutes = require('./routes/cardRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const authRoutes = require('./routes/authRoutes');
+const spaceRoutes = require('./routes/spaceRoutes');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const fs = require('fs');
 const connectDB = require('./utils/dbConnect');
+const WebSocketServer = require('./websocket/websocketServer');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Create HTTP server
+const server = http.createServer(app);
 
 // Ensure JWT secret is set
 if (!process.env.JWT_SECRET) {
@@ -26,6 +32,9 @@ if (!process.env.JWT_SECRET) {
 
 // Connect to MongoDB
 connectDB();
+
+// Initialize WebSocket server
+const wss = new WebSocketServer(server);
 
 // Ensure data directory exists for files that still need it (like agent-guidelines.txt)
 const dataDir = path.join(__dirname, 'data');
@@ -50,6 +59,7 @@ app.use('/api/auth', authRoutes);
 // Protected API routes
 app.use('/api/cards', authenticateToken, cardRoutes);
 app.use('/api/ai', authenticateToken, aiRoutes);
+app.use('/api/spaces', authenticateToken, spaceRoutes);
 
 // Check for unknown routes
 app.use((req, res, next) => {
@@ -69,8 +79,9 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`WebSocket server initialized`);
   console.log(`Data directory: ${dataDir}`);
   console.log(`MongoDB: ${process.env.MONGODB_URI ? 'Configured' : 'Not configured'}`);
   console.log(`OpenAI API: ${process.env.OPENAI_API_KEY ? 'Configured' : 'Not configured'}`);

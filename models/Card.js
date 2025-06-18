@@ -22,6 +22,12 @@ const cardSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  spaceId: {
+    type: String,
+    required: true,
+    default: 'public',
+    index: true
+  },
   type: {
     type: String,
     required: true,
@@ -65,7 +71,7 @@ const cardSchema = new mongoose.Schema({
 });
 
 // Create compound index for faster queries
-cardSchema.index({ userId: 1, type: 1 });
+cardSchema.index({ userId: 1, spaceId: 1, type: 1 });
 
 const Card = mongoose.model('Card', cardSchema);
 
