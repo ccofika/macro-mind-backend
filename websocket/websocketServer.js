@@ -82,6 +82,21 @@ class WebSocketServer {
             case 'card:unlock':
               this.handleCardUnlock(ws, data);
               break;
+            case 'card:created':
+              this.handleCardCreated(ws, data);
+              break;
+            case 'card:updated':
+              this.handleCardUpdated(ws, data);
+              break;
+            case 'card:deleted':
+              this.handleCardDeleted(ws, data);
+              break;
+            case 'connection:created':
+              this.handleConnectionCreated(ws, data);
+              break;
+            case 'connection:deleted':
+              this.handleConnectionDeleted(ws, data);
+              break;
             default:
               console.log('Unknown message type:', data.type);
           }
@@ -292,7 +307,7 @@ class WebSocketServer {
     
     // Broadcast cursor position
     this.broadcastToSpace(ws.currentSpaceId, {
-      type: 'cursor:update',
+      type: 'cursor:move',
       userId: userId,
       userName: ws.userName,
       userColor: ws.userColor,
@@ -419,6 +434,77 @@ class WebSocketServer {
       type: 'error',
       message: message
     }));
+  }
+  
+  // Card and connection event handlers
+  handleCardCreated(ws, data) {
+    if (!ws.currentSpaceId) return;
+    
+    console.log(`Card created in space ${ws.currentSpaceId}:`, data.card.id);
+    
+    // Broadcast to all users in the same space except the sender
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:created',
+      card: data.card,
+      userId: ws.userId,
+      userName: ws.userName
+    }, ws.userId);
+  }
+
+  handleCardUpdated(ws, data) {
+    if (!ws.currentSpaceId) return;
+    
+    console.log(`Card updated in space ${ws.currentSpaceId}:`, data.card.id);
+    
+    // Broadcast to all users in the same space except the sender
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:updated',
+      card: data.card,
+      userId: ws.userId,
+      userName: ws.userName
+    }, ws.userId);
+  }
+
+  handleCardDeleted(ws, data) {
+    if (!ws.currentSpaceId) return;
+    
+    console.log(`Card deleted in space ${ws.currentSpaceId}:`, data.cardId);
+    
+    // Broadcast to all users in the same space except the sender
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'card:deleted',
+      cardId: data.cardId,
+      userId: ws.userId,
+      userName: ws.userName
+    }, ws.userId);
+  }
+
+  handleConnectionCreated(ws, data) {
+    if (!ws.currentSpaceId) return;
+    
+    console.log(`Connection created in space ${ws.currentSpaceId}:`, data.connection.id);
+    
+    // Broadcast to all users in the same space except the sender
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'connection:created',
+      connection: data.connection,
+      userId: ws.userId,
+      userName: ws.userName
+    }, ws.userId);
+  }
+
+  handleConnectionDeleted(ws, data) {
+    if (!ws.currentSpaceId) return;
+    
+    console.log(`Connection deleted in space ${ws.currentSpaceId}:`, data.connectionId);
+    
+    // Broadcast to all users in the same space except the sender
+    this.broadcastToSpace(ws.currentSpaceId, {
+      type: 'connection:deleted',
+      connectionId: data.connectionId,
+      userId: ws.userId,
+      userName: ws.userName
+    }, ws.userId);
   }
   
   // Cleanup method

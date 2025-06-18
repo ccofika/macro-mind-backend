@@ -2,17 +2,48 @@ const { v4: uuidv4 } = require('uuid');
 const Card = require('../models/Card');
 const Connection = require('../models/Connection');
 const User = require('../models/User');
+const Space = require('../models/Space');
 
-// Get all cards for the current user
+// Get all cards for the current user or space
 exports.getAllCards = async (req, res) => {
   try {
     const userId = req.user.email;
     const { spaceId } = req.query;
     
-    // Build query
-    const query = { userId };
+    let query = {};
+    
     if (spaceId) {
-      query.spaceId = spaceId;
+      if (spaceId === 'public') {
+        // For public space, get all cards in the public space
+        query = { spaceId: 'public' };
+      } else {
+        // For private spaces, we need to check if user has access to the space
+        // and if they do, get all cards in that space
+        try {
+          const space = await Space.findById(spaceId);
+          
+          if (!space) {
+            return res.status(404).json({ success: false, message: 'Space not found' });
+          }
+          
+          // Check if user has access to this space
+          const isMember = space.members.some(member => member.userId === userId);
+          const isOwner = space.ownerId === userId;
+          
+          if (!space.isPublic && !isMember && !isOwner) {
+            return res.status(403).json({ success: false, message: 'Access denied to this space' });
+          }
+          
+          // User has access, get all cards in this space
+          query = { spaceId: spaceId };
+        } catch (spaceError) {
+          console.error("Error checking space access:", spaceError);
+          return res.status(500).json({ success: false, message: 'Error checking space access' });
+        }
+      }
+    } else {
+      // If no spaceId specified, get only user's personal cards (backwards compatibility)
+      query = { userId };
     }
     
     const cards = await Card.find(query);
@@ -172,16 +203,45 @@ exports.deleteMultipleCards = async (req, res) => {
   }
 };
 
-// Get all connections for the current user
+// Get all connections for the current user or space
 exports.getAllConnections = async (req, res) => {
   try {
     const userId = req.user.email;
     const { spaceId } = req.query;
     
-    // Build query
-    const query = { userId };
+    let query = {};
+    
     if (spaceId) {
-      query.spaceId = spaceId;
+      if (spaceId === 'public') {
+        // For public space, get all connections in the public space
+        query = { spaceId: 'public' };
+      } else {
+        // For private spaces, check access and get all connections in that space
+        try {
+          const space = await Space.findById(spaceId);
+          
+          if (!space) {
+            return res.status(404).json({ success: false, message: 'Space not found' });
+          }
+          
+          // Check if user has access to this space
+          const isMember = space.members.some(member => member.userId === userId);
+          const isOwner = space.ownerId === userId;
+          
+          if (!space.isPublic && !isMember && !isOwner) {
+            return res.status(403).json({ success: false, message: 'Access denied to this space' });
+          }
+          
+          // User has access, get all connections in this space
+          query = { spaceId: spaceId };
+        } catch (spaceError) {
+          console.error("Error checking space access:", spaceError);
+          return res.status(500).json({ success: false, message: 'Error checking space access' });
+        }
+      }
+    } else {
+      // If no spaceId specified, get only user's personal connections (backwards compatibility)
+      query = { userId };
     }
     
     const connections = await Connection.find(query);
