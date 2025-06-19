@@ -168,12 +168,12 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Add a member to a space
-router.post('/:id/members', authenticateToken, async (req, res) => {
+// Invite a user to a space (replaces direct member addition)
+router.post('/:id/invite', authenticateToken, async (req, res) => {
   try {
     const spaceId = req.params.id;
     const userId = req.user.id;
-    const { memberEmail, role } = req.body;
+    const { memberEmail, role, message } = req.body;
     
     if (!memberEmail || !role) {
       return res.status(400).json({ message: 'Member email and role are required' });
@@ -192,27 +192,70 @@ router.post('/:id/members', authenticateToken, async (req, res) => {
     
     // Check if user is the owner of the space
     if (!space.isOwner(userId)) {
-      return res.status(403).json({ message: 'You do not have permission to add members to this space' });
+      return res.status(403).json({ message: 'You do not have permission to invite users to this space' });
+    }
+
+    // Only allow invitations to PUBLIC spaces
+    if (!space.isPublic) {
+      return res.status(403).json({ message: 'Invitations can only be sent for public spaces' });
     }
     
-    // Find the user by email
-    const memberUser = await User.findOne({ email: memberEmail.toLowerCase() });
+    // Create invitation using the invitation service
+    const Invitation = require('../models/Invitation');
+    const normalizedEmail = memberEmail.toLowerCase().trim();
     
-    if (!memberUser) {
-      return res.status(404).json({ message: 'User not found with this email' });
+    // Check if the invitee is already a member
+    const inviteeUser = await User.findOne({ email: normalizedEmail });
+    if (inviteeUser && space.members.some(member => member.userId === inviteeUser._id.toString())) {
+      return res.status(400).json({ 
+        message: 'User is already a member of this space' 
+      });
     }
     
-    const memberUserId = memberUser._id.toString();
+    // Check if there's already a pending invitation
+    const existingInvitation = await Invitation.findBySpaceAndEmail(spaceId, normalizedEmail);
+    if (existingInvitation) {
+      return res.status(400).json({ 
+        message: 'An invitation to this space is already pending for this user' 
+      });
+    }
     
-    // Use helper method to add member
-    space.addMember(memberUserId, role);
+    // Create the invitation
+    const invitation = new Invitation({
+      spaceId,
+      inviterUserId: userId.toString(),
+      inviteeEmail: normalizedEmail,
+      inviteeUserId: inviteeUser ? inviteeUser._id.toString() : undefined,
+      role,
+      message: message || ''
+    });
     
-    await space.save();
+    await invitation.save();
     
-    res.json(space);
+    // Populate the invitation for response
+    await invitation.populate([
+      {
+        path: 'space',
+        select: 'name description isPublic'
+      },
+      {
+        path: 'inviter',
+        select: 'name email'
+      }
+    ]);
+    
+    console.log(`Invitation sent: ${invitation.inviter.name} invited ${normalizedEmail} to ${invitation.space.name}`);
+    
+    res.status(201).json(invitation);
   } catch (error) {
-    console.error('Error adding member to space:', error);
-    res.status(500).json({ message: 'Failed to add member to space' });
+    console.error('Error sending invitation:', error);
+    if (error.code === 11000) {
+      res.status(400).json({ 
+        message: 'An invitation to this space is already pending for this user' 
+      });
+    } else {
+      res.status(500).json({ message: 'Failed to send invitation' });
+    }
   }
 });
 

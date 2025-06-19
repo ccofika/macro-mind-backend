@@ -71,6 +71,7 @@ app.use('/api/cards', authenticateToken, cardRoutes);
 app.use('/api/ai', authenticateToken, aiRoutes);
 app.use('/api/ai-chat', authenticateToken, aiChatRoutes);
 app.use('/api/spaces', authenticateToken, spaceRoutes);
+app.use('/api/invitations', authenticateToken, require('./routes/invitationRoutes'));
 
 // Check for unknown routes
 app.use((req, res, next) => {

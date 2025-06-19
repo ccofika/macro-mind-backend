@@ -65,19 +65,25 @@ const spaceSchema = new mongoose.Schema({
 spaceSchema.index({ ownerId: 1 });
 spaceSchema.index({ 'members.userId': 1 });
 
-// Add owner as a member with owner role automatically
+// Add owner as a member with owner role automatically (only for PRIVATE spaces)
 spaceSchema.pre('save', function(next) {
   if (this.isNew) {
-    // Check if owner is already in members array
-    const ownerExists = this.members.some(member => member.userId === this.ownerId);
-    
-    if (!ownerExists) {
-      console.log(`Adding owner ${this.ownerId} to members of space ${this.name}`);
-      this.members.push({
-        userId: this.ownerId,
-        role: 'owner',
-        addedAt: new Date()
-      });
+    // Only add owner as member for PRIVATE spaces
+    // Public spaces start empty and members are added via invitations
+    if (!this.isPublic) {
+      // Check if owner is already in members array
+      const ownerExists = this.members.some(member => member.userId === this.ownerId);
+      
+      if (!ownerExists) {
+        console.log(`Adding owner ${this.ownerId} to members of private space ${this.name}`);
+        this.members.push({
+          userId: this.ownerId,
+          role: 'owner',
+          addedAt: new Date()
+        });
+      }
+    } else {
+      console.log(`Creating public space ${this.name} - owner will NOT be added as member initially`);
     }
   }
   next();
