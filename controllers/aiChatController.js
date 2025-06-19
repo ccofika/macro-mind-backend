@@ -282,10 +282,13 @@ exports.sendMessage = async (req, res) => {
     });
     
     // Search for relevant cards
+    // For macro mode, use expanded search (all accessible + public spaces)
     const searchResults = await aiChatService.searchCards(userId, content, {
       mode,
       spaceId: context.spaceId,
-      limit: 10
+      limit: 10,
+      searchAll: false, // Keep false for privacy, but will include public spaces now
+      conversationHistory: conversation.messages || [] // Pass conversation history for context
     });
     
     // Generate AI response
@@ -447,17 +450,21 @@ exports.deleteMessage = async (req, res) => {
  */
 exports.searchCards = async (req, res) => {
   try {
-    const { query, mode = 'search', spaceId = null, limit = 10 } = req.query;
+    const { query, mode = 'search', spaceId = null, limit = 10, searchAll = 'false' } = req.query;
     const userId = req.user._id;
     
     if (!query) {
       return res.status(400).json({ message: 'Search query is required' });
     }
     
+    // Convert searchAll string to boolean
+    const searchAllCards = searchAll === 'true';
+    
     const searchResults = await aiChatService.searchCards(userId, query, {
       mode,
       spaceId,
-      limit: parseInt(limit)
+      limit: parseInt(limit),
+      searchAll: searchAllCards
     });
     
     res.json(searchResults);
