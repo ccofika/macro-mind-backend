@@ -37,7 +37,7 @@ class CardWorkflowEngine {
     for (const categoryCard of categoryCards) {
       const workflow = this.traceWorkflowFromCategory(categoryCard, answerCards, connections);
       if (workflow.steps.length > 0) {
-        workflows.set(categoryCard.id, workflow);
+        workflows.set(categoryCard._id.toString(), workflow);
         console.log(`🔄 Built workflow for "${categoryCard.title}":`, workflow.steps.length, 'steps');
       }
     }
@@ -79,7 +79,7 @@ class CardWorkflowEngine {
     
     const workflow = {
       categoryCard: {
-        id: categoryCard.id,
+        id: categoryCard._id.toString(),
         title: categoryCard.title,
         content: categoryCard.content
       },
@@ -89,14 +89,16 @@ class CardWorkflowEngine {
 
     // Find direct connections from category to answer cards
     const directAnswers = connections.filter(conn => 
-      conn.fromCardId === categoryCard.id
+      conn.sourceId && conn.sourceId.toString() === categoryCard._id.toString()
     );
 
     console.log(`📎 Found ${directAnswers.length} direct connections from category`);
 
     // For each direct answer, trace the sequence
     for (const connection of directAnswers) {
-      const startAnswerCard = answerCards.find(card => card.id === connection.toCardId);
+      const startAnswerCard = answerCards.find(card => 
+        connection.targetId && card._id.toString() === connection.targetId.toString()
+      );
       if (startAnswerCard) {
         const sequence = this.traceAnswerSequence(startAnswerCard, answerCards, connections);
         
@@ -115,13 +117,15 @@ class CardWorkflowEngine {
    * Trace sequence of connected answer cards
    */
   traceAnswerSequence(startCard, allAnswerCards, connections, visited = new Set()) {
-    if (visited.has(startCard.id)) {
+    const cardId = startCard._id.toString();
+    if (visited.has(cardId)) {
       return []; // Avoid cycles
     }
 
-    visited.add(startCard.id);
+    visited.add(cardId);
     const sequence = [{
-      id: startCard.id,
+      id: cardId,
+      _id: startCard._id,
       title: startCard.title,
       content: startCard.content,
       step: visited.size,
@@ -130,12 +134,14 @@ class CardWorkflowEngine {
 
     // Find next connected answer card
     const nextConnections = connections.filter(conn => 
-      conn.fromCardId === startCard.id
+      conn.sourceId && conn.sourceId.toString() === cardId
     );
 
     for (const connection of nextConnections) {
-      const nextCard = allAnswerCards.find(card => card.id === connection.toCardId);
-      if (nextCard && !visited.has(nextCard.id)) {
+      const nextCard = allAnswerCards.find(card => 
+        connection.targetId && card._id.toString() === connection.targetId.toString()
+      );
+      if (nextCard && !visited.has(nextCard._id.toString())) {
         const nextSequence = this.traceAnswerSequence(nextCard, allAnswerCards, connections, new Set(visited));
         sequence.push(...nextSequence);
         break; // Take first valid path (can be enhanced to handle multiple paths)
@@ -158,17 +164,18 @@ class CardWorkflowEngine {
     });
 
     // Find answer cards not in any workflow
-    const orphanCards = answerCards.filter(card => !cardsInWorkflows.has(card.id));
+    const orphanCards = answerCards.filter(card => !cardsInWorkflows.has(card._id.toString()));
     
     console.log(`🔍 Found ${orphanCards.length} orphan cards`);
 
     // Build sequences for orphan cards
     const processed = new Set();
     for (const orphanCard of orphanCards) {
-      if (!processed.has(orphanCard.id)) {
+      const cardId = orphanCard._id.toString();
+      if (!processed.has(cardId)) {
         const sequence = this.traceAnswerSequence(orphanCard, answerCards, connections);
         if (sequence.length > 1) { // Only if it's a sequence, not single card
-          orphanWorkflows.set(orphanCard.id, {
+          orphanWorkflows.set(cardId, {
             categoryCard: null,
             steps: sequence,
             totalSteps: sequence.length

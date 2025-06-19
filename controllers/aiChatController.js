@@ -117,8 +117,11 @@ exports.createConversation = async (req, res) => {
       return res.status(400).json({ message: 'Conversation title is required' });
     }
     
+    // Generate unique conversation ID with more entropy
+    const conversationId = `chat_${Date.now()}_${Math.random().toString(36).substr(2, 12)}_${userId.toString().slice(-4)}`;
+    
     const conversation = new AIChatConversation({
-      id: `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: conversationId,
       title,
       userId,
       messages: [],
@@ -246,9 +249,16 @@ exports.sendMessage = async (req, res) => {
     });
     
     if (!conversation) {
+      // Validate conversationId format and regenerate if invalid
+      let validConversationId = conversationId;
+      if (!conversationId.startsWith('chat_') || conversationId.length < 15) {
+        validConversationId = `chat_${Date.now()}_${Math.random().toString(36).substr(2, 12)}_${userId.toString().slice(-4)}`;
+        console.log(`Generated new conversation ID: ${validConversationId} (original: ${conversationId})`);
+      }
+      
       // Create new conversation if it doesn't exist
       conversation = new AIChatConversation({
-        id: conversationId,
+        id: validConversationId,
         title: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
         userId,
         messages: [],
