@@ -8,10 +8,13 @@ const aiChatController = require('../controllers/aiChatController');
 router.get('/conversations', aiChatController.getConversations);
 router.get('/conversations/:conversationId', aiChatController.getConversation);
 router.post('/conversations', aiChatController.createConversation);
+router.put('/conversations/:conversationId/title', aiChatController.updateConversationTitle);
 router.delete('/conversations/:conversationId', aiChatController.deleteConversation);
 
 // Message routes
 router.post('/send', aiChatController.sendMessage);
+router.put('/conversations/:conversationId/messages/:messageId', aiChatController.editMessage);
+router.delete('/conversations/:conversationId/messages/:messageId', aiChatController.deleteMessage);
 
 // Card search route
 router.get('/search', aiChatController.searchCards);
