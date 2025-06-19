@@ -24,7 +24,7 @@ exports.authenticateToken = async (req, res, next) => {
           return res.status(403).json({ success: false, message: 'User not found' });
         }
         
-        req.user = decoded; // Add user info to request
+        req.user = user; // Add full user object to request
         next();
       } catch (error) {
         console.error('Error verifying user:', error);

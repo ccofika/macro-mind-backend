@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const cardRoutes = require('./routes/cardRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const aiChatRoutes = require('./routes/aiChatRoutes');
 const authRoutes = require('./routes/authRoutes');
 const spaceRoutes = require('./routes/spaceRoutes');
 const { authenticateToken } = require('./middleware/authMiddleware');
@@ -68,6 +69,7 @@ app.use('/api/auth', authRoutes);
 // Protected API routes
 app.use('/api/cards', authenticateToken, cardRoutes);
 app.use('/api/ai', authenticateToken, aiRoutes);
+app.use('/api/ai-chat', authenticateToken, aiChatRoutes);
 app.use('/api/spaces', authenticateToken, spaceRoutes);
 
 // Check for unknown routes
