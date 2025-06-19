@@ -79,12 +79,12 @@ class ConnectionTest {
         this.isConnected = true;
         break;
         
-      case 'connectionCreated':
+      case 'connection:created':
         console.log('Connection created event:'.green, message.connection);
         this.connectionEvents.push({ type: 'created', connection: message.connection });
         break;
         
-      case 'connectionDeleted':
+      case 'connection:deleted':
         console.log('Connection deleted event:'.yellow, message.connectionId);
         this.connectionEvents.push({ type: 'deleted', connectionId: message.connectionId });
         break;
