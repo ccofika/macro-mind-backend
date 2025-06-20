@@ -593,14 +593,18 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
       {
         $lookup: {
           from: "cards",
-          let: { userId: { $toString: "$_id" } },
+          let: { 
+            userIdString: { $toString: "$_id" },
+            userEmail: "$email"
+          },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $or: [
-                    { $eq: ["$userId", "$$userId"] },
-                    { $eq: [{ $toString: "$userId" }, "$$userId"] }
+                    { $eq: ["$userId", "$$userIdString"] },
+                    { $eq: ["$userId", "$$userEmail"] },
+                    { $eq: [{ $toString: "$userId" }, "$$userIdString"] }
                   ]
                 }
               }
@@ -612,14 +616,18 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
       {
         $lookup: {
           from: "spaces",
-          let: { userId: { $toString: "$_id" } },
+          let: { 
+            userIdString: { $toString: "$_id" },
+            userEmail: "$email"
+          },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $or: [
-                    { $eq: ["$ownerId", "$$userId"] },
-                    { $eq: [{ $toString: "$ownerId" }, "$$userId"] }
+                    { $eq: ["$ownerId", "$$userIdString"] },
+                    { $eq: ["$ownerId", "$$userEmail"] },
+                    { $eq: [{ $toString: "$ownerId" }, "$$userIdString"] }
                   ]
                 }
               }
@@ -728,18 +736,69 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
         }
       ]),
 
-      // Top card creators
+      // Top card creators with user details
       Card.aggregate([
-        {
-          $group: {
-            _id: "$userId",
-            cardCount: { $sum: 1 },
+      {
+        $group: {
+          _id: "$userId",
+          cardCount: { $sum: 1 },
             lastCardCreated: { $max: "$createdAt" },
             cardTypes: { $addToSet: "$type" }
           }
         },
         { $sort: { cardCount: -1 } },
-        { $limit: 10 }
+        { $limit: 10 },
+        {
+          $lookup: {
+            from: "users",
+            let: { userId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $or: [
+                      // Try direct ObjectId match if userId is ObjectId
+                      {
+                        $and: [
+                          { $eq: [{ $type: "$$userId" }, "objectId"] },
+                          { $eq: ["$_id", "$$userId"] }
+                        ]
+                      },
+                      // Try email match if userId is string (email)
+                      {
+                        $and: [
+                          { $eq: [{ $type: "$$userId" }, "string"] },
+                          { $eq: ["$email", "$$userId"] }
+                        ]
+                      },
+                      // Try string conversion match
+                      { $eq: [{ $toString: "$_id" }, { $toString: "$$userId" }] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: "userInfo"
+          }
+        },
+        {
+          $addFields: {
+            userDetails: { $arrayElemAt: ["$userInfo", 0] },
+            name: { $ifNull: [{ $arrayElemAt: ["$userInfo.name", 0] }, "Unknown User"] },
+            email: { $ifNull: [{ $arrayElemAt: ["$userInfo.email", 0] }, "unknown@example.com"] }
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            cardCount: 1,
+            lastCardCreated: 1,
+            cardTypes: 1,
+            name: 1,
+            email: 1,
+            userDetails: 1
+          }
+        }
       ])
     ]);
 
@@ -755,12 +814,12 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
       {
         $facet: {
           overview: [
-            {
-              $group: {
-                _id: null,
+      {
+        $group: {
+          _id: null,
                 totalSpaces: { $sum: 1 },
-                publicSpaceCount: { $sum: { $cond: ["$isPublic", 1, 0] } },
-                privateSpaceCount: { $sum: { $cond: ["$isPublic", 0, 1] } },
+          publicSpaceCount: { $sum: { $cond: ["$isPublic", 1, 0] } },
+          privateSpaceCount: { $sum: { $cond: ["$isPublic", 0, 1] } },
                 avgMembersPerSpace: { $avg: { $size: "$members" } },
                 totalMembers: { $sum: { $size: "$members" } }
               }
@@ -800,20 +859,20 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
           $facet: {
             totalConnections: [{ $count: "count" }],
             userConnections: [
-              {
-                $group: {
-                  _id: "$userId",
-                  connectionCount: { $sum: 1 }
-                }
+      {
+        $group: {
+          _id: "$userId",
+          connectionCount: { $sum: 1 }
+        }
               }
             ],
             newConnections: [
               { $match: { createdAt: { $gte: dateThreshold } } },
               { $count: "count" }
             ]
-          }
         }
-      ]);
+      }
+    ]);
 
       const connectionsData = connectionData[0] || {};
       const totalConnections = connectionsData.totalConnections?.[0]?.count || 0;
@@ -854,8 +913,8 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
         // Card type distribution
         cardTypeDistribution: cardStatsData.cardTypes || [],
         
-        // Top creators for cards tab
-        ...cardCreators
+        // Top creators properly structured
+        topCreators: cardCreators || []
       },
       collaborationPatterns: {
         ...collaborationData,
@@ -874,6 +933,250 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
 
   } catch (error) {
     console.error('💥 Users and cards analytics error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
+  }
+};
+
+// Get trends analytics for Users & Cards
+exports.getUsersCardsTrends = async (req, res) => {
+  try {
+    console.log('🚀 Starting Users & Cards Trends Analytics...');
+    
+    const { timeRange = '30d' } = req.query;
+    
+    // Calculate date ranges
+    const now = new Date();
+    const getRangeDate = (range) => {
+      const multipliers = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
+      const days = multipliers[range] || 30;
+      return new Date(now - days * 24 * 60 * 60 * 1000);
+    };
+    
+    const startDate = getRangeDate(timeRange);
+    const intervals = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : timeRange === '90d' ? 30 : 52;
+    const intervalDays = timeRange === '7d' ? 1 : timeRange === '30d' ? 1 : timeRange === '90d' ? 3 : 7;
+    
+    console.log(`📊 Analyzing trends for ${timeRange} with ${intervals} data points`);
+
+    // Generate time series data
+    const [userTrends, cardTrends, spaceTrends, connectionTrends] = await Promise.all([
+      // User registration trends
+      User.aggregate([
+        {
+          $match: { createdAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$createdAt"
+              }
+            },
+            count: { $sum: 1 },
+            date: { $first: "$createdAt" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Card creation trends
+      Card.aggregate([
+        {
+          $match: { createdAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$createdAt"
+              }
+            },
+            count: { $sum: 1 },
+            types: { $addToSet: "$type" },
+            date: { $first: "$createdAt" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Space creation trends
+      Space.aggregate([
+        {
+          $match: { createdAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$createdAt"
+              }
+            },
+            count: { $sum: 1 },
+            publicSpaces: { $sum: { $cond: ["$isPublic", 1, 0] } },
+            privateSpaces: { $sum: { $cond: ["$isPublic", 0, 1] } },
+            date: { $first: "$createdAt" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Connection creation trends
+      Connection.aggregate([
+        {
+          $match: { createdAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$createdAt"
+              }
+            },
+            count: { $sum: 1 },
+            date: { $first: "$createdAt" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ])
+    ]);
+
+    // Calculate growth rates and insights
+    const calculateGrowthRate = (trends) => {
+      if (trends.length < 2) return 0;
+      const recent = trends.slice(-7).reduce((sum, item) => sum + item.count, 0);
+      const previous = trends.slice(-14, -7).reduce((sum, item) => sum + item.count, 0);
+      return previous > 0 ? Math.round(((recent - previous) / previous) * 100) : 0;
+    };
+
+    // User engagement analysis
+    const activeUserThreshold = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const [engagementStats, velocityStats] = await Promise.all([
+      User.aggregate([
+        {
+          $facet: {
+            totalUsers: [{ $count: "count" }],
+            activeUsers: [
+              { $match: { lastLogin: { $gte: activeUserThreshold } } },
+              { $count: "count" }
+            ],
+            newUsers: [
+              { $match: { createdAt: { $gte: startDate } } },
+              { $count: "count" }
+            ]
+          }
+        }
+      ]),
+
+      Card.aggregate([
+        {
+          $facet: {
+            dailyAverage: [
+              { $match: { createdAt: { $gte: startDate } } },
+              {
+                $group: {
+                  _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                  count: { $sum: 1 }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  avgPerDay: { $avg: "$count" }
+                }
+              }
+            ],
+            peakDay: [
+              { $match: { createdAt: { $gte: startDate } } },
+              {
+                $group: {
+                  _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                  count: { $sum: 1 }
+                }
+              },
+              { $sort: { count: -1 } },
+              { $limit: 1 }
+            ]
+          }
+        }
+      ])
+    ]);
+
+    const engagement = engagementStats[0] || {};
+    const velocity = velocityStats[0] || {};
+
+    const trends = {
+      timeRange,
+      dateRange: {
+        start: startDate.toISOString(),
+        end: now.toISOString()
+      },
+      series: {
+        users: userTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          timestamp: new Date(item.date).getTime()
+        })),
+        cards: cardTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          types: item.types,
+          timestamp: new Date(item.date).getTime()
+        })),
+        spaces: spaceTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          publicSpaces: item.publicSpaces,
+          privateSpaces: item.privateSpaces,
+          timestamp: new Date(item.date).getTime()
+        })),
+        connections: connectionTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          timestamp: new Date(item.date).getTime()
+        }))
+      },
+      insights: {
+        userGrowthRate: calculateGrowthRate(userTrends),
+        cardGrowthRate: calculateGrowthRate(cardTrends),
+        spaceGrowthRate: calculateGrowthRate(spaceTrends),
+        connectionGrowthRate: calculateGrowthRate(connectionTrends),
+        engagement: {
+          totalUsers: engagement.totalUsers?.[0]?.count || 0,
+          activeUsers: engagement.activeUsers?.[0]?.count || 0,
+          newUsers: engagement.newUsers?.[0]?.count || 0,
+          activityRate: engagement.totalUsers?.[0]?.count > 0 ? 
+            Math.round((engagement.activeUsers?.[0]?.count / engagement.totalUsers?.[0]?.count) * 100) : 0
+        },
+        velocity: {
+          avgCardsPerDay: Math.round((velocity.dailyAverage?.[0]?.avgPerDay || 0) * 100) / 100,
+          peakDay: velocity.peakDay?.[0] || null
+        }
+      },
+      summary: {
+        totalDataPoints: userTrends.length + cardTrends.length + spaceTrends.length + connectionTrends.length,
+        analysisQuality: userTrends.length > 5 ? 'high' : userTrends.length > 2 ? 'medium' : 'low'
+      }
+    };
+
+    console.log('📈 Trends analysis completed:', {
+      userDataPoints: userTrends.length,
+      cardDataPoints: cardTrends.length,
+      spaceDataPoints: spaceTrends.length,
+      connectionDataPoints: connectionTrends.length
+    });
+
+    res.json({ success: true, data: trends });
+
+  } catch (error) {
+    console.error('💥 Trends analytics error:', error);
     res.status(500).json({ 
       success: false, 
       message: error.message,

@@ -193,6 +193,11 @@ router.get('/analytics/users-cards',
   adminController.getUsersAndCardsAnalytics
 );
 
+router.get('/analytics/users-cards/trends', 
+  auditLog('view_user_data'), 
+  adminController.getUsersCardsTrends
+);
+
 // ===============================
 // PAGE 3: AI ANALYTICS
 // ===============================
