@@ -91,12 +91,20 @@ exports.getDashboardOverview = async (req, res) => {
       Card.countDocuments({ createdAt: { $gte: dateThreshold } }),
       AIChatConversation.countDocuments({ createdAt: { $gte: dateThreshold } }),
       Space.countDocuments({ updatedAt: { $gte: dateThreshold } }),
-      User.find().sort({ createdAt: -1 }).limit(10).select('name email createdAt lastLogin'),
-      Card.find().sort({ createdAt: -1 }).limit(10),
-      AIChatConversation.find().sort({ createdAt: -1 }).limit(10).populate('userId', 'name email').catch(() => [])
-    ]).then(results => results.map(result => result.status === 'fulfilled' ? result.value : 0));
+      User.find({ 
+        $or: [
+          { createdAt: { $gte: dateThreshold } },
+          { lastLogin: { $gte: dateThreshold } }
+        ]
+      }).sort({ $natural: -1 }).limit(10).select('name email createdAt lastLogin'),
+      Card.find({ createdAt: { $gte: dateThreshold } }).sort({ createdAt: -1 }).limit(10),
+      AIChatConversation.find({ createdAt: { $gte: dateThreshold } }).sort({ createdAt: -1 }).limit(10).populate('userId', 'name email').catch(() => [])
+    ]).then(results => results.map(result => result.status === 'fulfilled' ? result.value : (Array.isArray(result.value) ? result.value : 0)));
 
     console.log('✅ Basic counts retrieved successfully');
+    console.log('📊 Active users:', activeUsers, 'out of total:', totalUsers);
+    console.log('📊 Recent users count:', Array.isArray(recentUsers) ? recentUsers.length : 'not array');
+    console.log('📊 Recent cards count:', Array.isArray(recentCards) ? recentCards.length : 'not array');
 
     // Get trends with error handling
     let userRegistrationTrends = [];
@@ -211,6 +219,124 @@ exports.getDashboardOverview = async (req, res) => {
       console.error('❌ Error populating recent cards:', error.message);
     }
 
+    // If there are not enough recent items in the time range, fallback to all-time recent
+    let finalRecentUsers = recentUsers;
+    let finalRecentCards = recentCardsWithUsers;
+    let finalRecentAIChats = recentAIChats;
+
+    if (!Array.isArray(recentUsers) || recentUsers.length < 3) {
+      console.log('⚠️ Not enough recent users in timeRange, getting users with recent activity');
+      try {
+        // Get users who have created cards recently
+        const usersWithRecentCards = await Card.aggregate([
+          { $match: { createdAt: { $gte: dateThreshold } } },
+          { $group: { _id: "$userId", lastCardCreated: { $max: "$createdAt" } } },
+          { $sort: { lastCardCreated: -1 } },
+          { $limit: 10 },
+          {
+            $addFields: {
+              userObjectId: {
+                $cond: {
+                  if: { $eq: [{ $strLenCP: "$_id" }, 24] },
+                  then: { 
+                    $cond: {
+                      if: { $regexMatch: { input: "$_id", regex: /^[0-9a-fA-F]{24}$/ } },
+                      then: { $toObjectId: "$_id" },
+                      else: null
+                    }
+                  },
+                  else: null
+                }
+              }
+            }
+          },
+          {
+            $lookup: {
+              from: "users",
+              let: { userId: "$_id", userObjId: "$userObjectId" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $or: [
+                        { $eq: ["$_id", "$$userObjId"] },
+                        { $eq: [{ $toString: "$_id" }, "$$userId"] },
+                        { $eq: ["$email", "$$userId"] }
+                      ]
+                    }
+                  }
+                }
+              ],
+              as: "user"
+            }
+          },
+          { 
+            $addFields: {
+              user: { $arrayElemAt: ["$user", 0] }
+            }
+          },
+          {
+            $project: {
+              _id: "$user._id",
+              name: "$user.name",
+              email: "$user.email", 
+              createdAt: "$user.createdAt",
+              lastLogin: "$user.lastLogin",
+              lastCardCreated: 1
+            }
+          }
+        ]);
+
+        if (usersWithRecentCards.length > 0) {
+          finalRecentUsers = usersWithRecentCards;
+          console.log(`✅ Found ${usersWithRecentCards.length} users with recent card activity`);
+        } else {
+          // Fallback to all-time recent users
+          finalRecentUsers = await User.find().sort({ createdAt: -1 }).limit(10).select('name email createdAt lastLogin');
+          console.log('📋 Using all-time recent users as fallback');
+        }
+      } catch (error) {
+        console.error('❌ Error getting recent active users:', error.message);
+        finalRecentUsers = [];
+      }
+    }
+
+    if (!Array.isArray(recentCardsWithUsers) || recentCardsWithUsers.length < 3) {
+      console.log('⚠️ Not enough recent cards in timeRange, falling back to all-time');
+      try {
+        const fallbackCards = await Card.find().sort({ createdAt: -1 }).limit(10);
+        finalRecentCards = await Promise.all(
+          fallbackCards.map(async (card) => {
+            try {
+              const user = await User.findById(card.userId).select('name email');
+              return {
+                ...card.toObject(),
+                userId: user || { name: 'Unknown User', email: 'unknown@email.com' }
+              };
+            } catch (error) {
+              return {
+                ...card.toObject(),
+                userId: { name: 'Unknown User', email: 'unknown@email.com' }
+              };
+            }
+          })
+        );
+      } catch (error) {
+        console.error('❌ Error getting fallback recent cards:', error.message);
+        finalRecentCards = [];
+      }
+    }
+
+    if (!Array.isArray(recentAIChats) || recentAIChats.length < 2) {
+      console.log('⚠️ Not enough recent AI chats in timeRange, falling back to all-time');
+      try {
+        finalRecentAIChats = await AIChatConversation.find().sort({ createdAt: -1 }).limit(10).populate('userId', 'name email');
+      } catch (error) {
+        console.error('❌ Error getting fallback recent AI chats:', error.message);
+        finalRecentAIChats = [];
+      }
+    }
+
     // Get top users by activity
     const topUsersByCards = await Card.aggregate([
       {
@@ -323,14 +449,22 @@ exports.getDashboardOverview = async (req, res) => {
       },
       topUsers: topUsersByCards,
       recentActivity: {
-        users: recentUsers,
-        cards: recentCardsWithUsers,
-        aiChats: recentAIChats
+        users: finalRecentUsers,
+        cards: finalRecentCards,
+        aiChats: finalRecentAIChats
       },
       systemHealth
     };
 
     console.log('✅ Dashboard overview data compiled successfully');
+    console.log('📊 Recent Activity Summary:');
+    console.log('  - Users:', Array.isArray(overview.recentActivity.users) ? overview.recentActivity.users.length : 'not array');
+    console.log('  - Cards:', Array.isArray(overview.recentActivity.cards) ? overview.recentActivity.cards.length : 'not array');
+    console.log('  - AI Chats:', Array.isArray(overview.recentActivity.aiChats) ? overview.recentActivity.aiChats.length : 'not array');
+    console.log('📊 Platform Stats:');
+    console.log('  - Active users:', overview.platformStats.activeUsers);
+    console.log('  - Total users:', overview.platformStats.totalUsers);
+    
     res.json({ success: true, data: overview });
   } catch (error) {
     console.error('💥 Dashboard overview error:', error);

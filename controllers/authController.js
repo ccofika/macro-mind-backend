@@ -41,6 +41,10 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
     
+    // Update last login time
+    user.lastLogin = new Date();
+    await user.save();
+    
     // Generate JWT token
     const token = generateToken(user);
     
@@ -102,6 +106,7 @@ exports.googleLogin = async (req, res) => {
       user.name = name;
       user.picture = picture;
       user.googleId = payload.sub;
+      user.lastLogin = new Date();
       await user.save();
     }
     
