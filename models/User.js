@@ -58,6 +58,20 @@ const userSchema = new mongoose.Schema({
       updatedAt: new Date()
     })
   },
+  navCategories: [{
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    icon: { type: String, default: 'folder' },
+    isDefault: { type: Boolean, default: false }
+  }],
+  navLinks: [{
+    id: { type: String, required: true },
+    categoryId: { type: String, required: true },
+    name: { type: String, required: true },
+    url: { type: String, required: true },
+    action: { type: String, enum: ['open', 'copy'], default: 'open' },
+    createdAt: { type: Date, default: Date.now }
+  }],
   createdAt: {
     type: Date,
     default: Date.now

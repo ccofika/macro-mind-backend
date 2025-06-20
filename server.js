@@ -7,6 +7,7 @@ const aiRoutes = require('./routes/aiRoutes');
 const aiChatRoutes = require('./routes/aiChatRoutes');
 const authRoutes = require('./routes/authRoutes');
 const spaceRoutes = require('./routes/spaceRoutes');
+const userRoutes = require('./routes/userRoutes');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const fs = require('fs');
 const connectDB = require('./utils/dbConnect');
@@ -71,6 +72,7 @@ app.use('/api/cards', authenticateToken, cardRoutes);
 app.use('/api/ai', authenticateToken, aiRoutes);
 app.use('/api/ai-chat', authenticateToken, aiChatRoutes);
 app.use('/api/spaces', authenticateToken, spaceRoutes);
+app.use('/api/users', authenticateToken, userRoutes);
 app.use('/api/invitations', authenticateToken, require('./routes/invitationRoutes'));
 
 // Check for unknown routes
