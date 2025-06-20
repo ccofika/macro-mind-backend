@@ -8,7 +8,10 @@
     "dev": "nodemon server.js",
     "migrate": "node utils/migrateToMongo.js",
     "migrate-spaces": "node scripts/migrateSpaceData.js",
-    "test-permissions": "node scripts/testSpacePermissions.js"
+    "test-permissions": "node scripts/testSpacePermissions.js",
+    "generate-admin": "node scripts/generateAdminCredentials.js",
+    "generate-admin-force": "node scripts/generateAdminCredentials.js --force",
+    "create-simple-admin": "node scripts/createSimpleAdmin.js"
   },
   "keywords": [],
   "author": "",

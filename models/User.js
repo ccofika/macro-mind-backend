@@ -47,7 +47,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin'],
+    enum: ['user', 'admin', 'super_admin'],
     default: 'user'
   },
   canvasState: {
@@ -75,6 +75,26 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  lastLogin: {
+    type: Date,
+    default: null
+  },
+  loginAttempts: {
+    type: Number,
+    default: 0
+  },
+  lockedUntil: {
+    type: Date,
+    default: null
+  },
+  ipAddress: {
+    type: String,
+    default: null
+  },
+  sessionTimeout: {
+    type: Number,
+    default: 30 // minutes
   }
 }, { timestamps: true });
 

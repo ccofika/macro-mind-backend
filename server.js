@@ -8,6 +8,7 @@ const aiChatRoutes = require('./routes/aiChatRoutes');
 const authRoutes = require('./routes/authRoutes');
 const spaceRoutes = require('./routes/spaceRoutes');
 const userRoutes = require('./routes/userRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const fs = require('fs');
 const connectDB = require('./utils/dbConnect');
@@ -66,6 +67,9 @@ app.use((req, res, next) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
+
+// Admin routes (some public, some protected)
+app.use('/api/admin', adminRoutes);
 
 // Protected API routes
 app.use('/api/cards', authenticateToken, cardRoutes);
