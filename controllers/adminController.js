@@ -201,12 +201,34 @@ exports.getDashboardOverview = async (req, res) => {
       recentCardsWithUsers = await Promise.all(
         (recentCards || []).map(async (card) => {
           try {
-            const user = await User.findById(card.userId).select('name email');
+            let user = null;
+            
+            // Try to find user by ObjectId first
+            if (card.userId) {
+              // If userId is already an ObjectId, try direct lookup
+              if (typeof card.userId === 'object') {
+                user = await User.findById(card.userId).select('name email');
+              } else {
+                // If userId is a string, try multiple approaches
+                // First try as ObjectId
+                if (card.userId.match(/^[0-9a-fA-F]{24}$/)) {
+                  user = await User.findById(card.userId).select('name email');
+                }
+                // If not found, try as email
+                if (!user) {
+                  user = await User.findOne({ email: card.userId }).select('name email');
+                }
+              }
+            }
+            
+            console.log(`Card ${card._id}: userId=${card.userId}, found user: ${user ? user.name : 'NOT FOUND'}`);
+            
             return {
               ...card.toObject(),
               userId: user || { name: 'Unknown User', email: 'unknown@email.com' }
             };
           } catch (error) {
+            console.error(`Error finding user for card ${card._id}:`, error.message);
             return {
               ...card.toObject(),
               userId: { name: 'Unknown User', email: 'unknown@email.com' }
@@ -308,12 +330,34 @@ exports.getDashboardOverview = async (req, res) => {
         finalRecentCards = await Promise.all(
           fallbackCards.map(async (card) => {
             try {
-              const user = await User.findById(card.userId).select('name email');
+              let user = null;
+              
+              // Try to find user by ObjectId first
+              if (card.userId) {
+                // If userId is already an ObjectId, try direct lookup
+                if (typeof card.userId === 'object') {
+                  user = await User.findById(card.userId).select('name email');
+                } else {
+                  // If userId is a string, try multiple approaches
+                  // First try as ObjectId
+                  if (card.userId.match(/^[0-9a-fA-F]{24}$/)) {
+                    user = await User.findById(card.userId).select('name email');
+                  }
+                  // If not found, try as email
+                  if (!user) {
+                    user = await User.findOne({ email: card.userId }).select('name email');
+                  }
+                }
+              }
+              
+              console.log(`Fallback Card ${card._id}: userId=${card.userId}, found user: ${user ? user.name : 'NOT FOUND'}`);
+              
               return {
                 ...card.toObject(),
                 userId: user || { name: 'Unknown User', email: 'unknown@email.com' }
               };
             } catch (error) {
+              console.error(`Error finding user for fallback card ${card._id}:`, error.message);
               return {
                 ...card.toObject(),
                 userId: { name: 'Unknown User', email: 'unknown@email.com' }
@@ -483,8 +527,42 @@ exports.getDashboardOverview = async (req, res) => {
 // Get detailed user and card analytics
 exports.getUsersAndCardsAnalytics = async (req, res) => {
   try {
-    const { page = 1, limit = 50, search = '', sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    console.log('🚀 Starting Users & Cards Analytics request...');
+    
+    const { 
+      page = 1, 
+      limit = 20, 
+      search = '', 
+      sortBy = 'createdAt', 
+      sortOrder = 'desc',
+      timeRange = '30d',
+      filterBy = 'all'
+    } = req.query;
+    
     const skip = (page - 1) * limit;
+    console.log(`📋 Request parameters: page=${page}, limit=${limit}, search="${search}", sortBy="${sortBy}", timeRange="${timeRange}", filterBy="${filterBy}"`);
+
+    // Calculate date range based on timeRange parameter
+    let dateThreshold;
+    switch (timeRange) {
+      case '7d':
+        dateThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        dateThreshold = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        break;
+      case '1y':
+        dateThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    // Active user threshold (30 days)
+    const activeUserThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     // Build search query
     let searchQuery = {};
@@ -497,118 +575,267 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
       };
     }
 
-    // Get users with their card counts
-    const users = await User.aggregate([
+    // Apply filter
+    if (filterBy === 'active') {
+      searchQuery.lastLogin = { $gte: activeUserThreshold };
+    } else if (filterBy === 'inactive') {
+      searchQuery.$or = [
+        { lastLogin: { $lt: activeUserThreshold } },
+        { lastLogin: { $exists: false } }
+      ];
+    }
+
+    console.log('🔍 Search query:', JSON.stringify(searchQuery));
+
+    // Get users with their card counts using proper aggregation
+    const usersAggregation = [
       { $match: searchQuery },
       {
         $lookup: {
           from: "cards",
-          localField: "_id",
-          foreignField: "userId",
-          as: "cards"
+          let: { userId: { $toString: "$_id" } },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$userId", "$$userId"] },
+                    { $eq: [{ $toString: "$userId" }, "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: "userCards"
         }
       },
       {
         $lookup: {
           from: "spaces",
-          localField: "_id",
-          foreignField: "ownerId",
+          let: { userId: { $toString: "$_id" } },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$ownerId", "$$userId"] },
+                    { $eq: [{ $toString: "$ownerId" }, "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
           as: "ownedSpaces"
         }
       },
       {
         $addFields: {
-          cardCount: { $size: "$cards" },
+          cardCount: { $size: "$userCards" },
           spaceCount: { $size: "$ownedSpaces" },
           isActive: {
             $cond: {
-              if: { $gte: ["$lastLogin", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)] },
+              if: { 
+                $and: [
+                  { $ne: ["$lastLogin", null] },
+                  { $gte: ["$lastLogin", activeUserThreshold] }
+                ]
+              },
               then: true,
               else: false
             }
           }
         }
       },
-      { $sort: { [sortBy]: sortOrder === 'desc' ? -1 : 1 } },
-      { $skip: skip },
-      { $limit: parseInt(limit) },
       {
         $project: {
-          password: 0,
-          googleId: 0
-        }
-      }
-    ]);
-
-    const totalUsers = await User.countDocuments(searchQuery);
-
-    // Get card analytics by user behavior
-    const cardAnalytics = await Card.aggregate([
-      {
-        $group: {
-          _id: "$userId",
-          cardCount: { $sum: 1 },
-          cardTypes: { $push: "$type" },
-          lastCardCreated: { $max: "$createdAt" }
+          _id: 1,
+          name: 1,
+          email: 1,
+          createdAt: 1,
+          lastLogin: 1,
+          role: 1,
+          cardCount: 1,
+          spaceCount: 1,
+          isActive: 1,
+          suspended: { $ifNull: ["$suspended", false] }
         }
       },
-      {
-        $addFields: {
-          typeDistribution: {
-            $reduce: {
-              input: "$cardTypes",
-              initialValue: {},
-              in: {
-                $mergeObjects: [
-                  "$$value",
-                  {
-                    $cond: [
-                      { $eq: [{ $type: { $getField: { field: "$$this", input: "$$value" } } }, "missing"] },
-                      { $literal: { "$$this": 1 } },
-                      { $literal: { "$$this": { $add: [{ $getField: { field: "$$this", input: "$$value" } }, 1] } } }
-                    ]
-                  }
-                ]
-              }
-            }
+      { $sort: { [sortBy]: sortOrder === 'desc' ? -1 : 1 } }
+    ];
+
+    // Get total count first
+    const totalCountPipeline = [...usersAggregation, { $count: "total" }];
+    const totalCountResult = await User.aggregate(totalCountPipeline);
+    const totalUsers = totalCountResult.length > 0 ? totalCountResult[0].total : 0;
+
+    // Get paginated users
+    const users = await User.aggregate([
+      ...usersAggregation,
+      { $skip: skip },
+      { $limit: parseInt(limit) }
+    ]);
+
+    console.log(`👥 Found ${users.length} users on page ${page} of ${Math.ceil(totalUsers / limit)}`);
+    
+    // Debug user data
+    if (users.length > 0) {
+      console.log('📊 Debug - First user sample:', {
+        id: users[0]._id,
+        name: users[0].name,
+        email: users[0].email,
+        cardCount: users[0].cardCount,
+        spaceCount: users[0].spaceCount,
+        lastLogin: users[0].lastLogin,
+        isActive: users[0].isActive,
+        suspended: users[0].suspended
+      });
+    }
+
+    // Get comprehensive card analytics
+    const [totalCards, cardStats, cardCreators] = await Promise.all([
+      // Total cards count
+      Card.countDocuments(),
+      
+      // Cards created in time period
+      Card.aggregate([
+        {
+          $facet: {
+            totalCards: [{ $count: "count" }],
+            newCards: [
+              { $match: { createdAt: { $gte: dateThreshold } } },
+              { $count: "count" }
+            ],
+            cardTypes: [
+              {
+                $group: {
+                  _id: "$type",
+                  count: { $sum: 1 }
+                }
+              },
+              { $sort: { count: -1 } }
+            ],
+            activeUsers: [
+              {
+                $group: {
+                  _id: "$userId",
+                  cardCount: { $sum: 1 }
+                }
+              },
+              { $match: { cardCount: { $gt: 0 } } },
+              { $count: "count" }
+            ]
           }
         }
-      },
-      { $sort: { cardCount: -1 } },
-      { $limit: 100 }
+      ]),
+
+      // Top card creators
+      Card.aggregate([
+        {
+          $group: {
+            _id: "$userId",
+            cardCount: { $sum: 1 },
+            lastCardCreated: { $max: "$createdAt" },
+            cardTypes: { $addToSet: "$type" }
+          }
+        },
+        { $sort: { cardCount: -1 } },
+        { $limit: 10 }
+      ])
     ]);
+
+    const cardStatsData = cardStats[0] || {};
+    const totalCardsCount = cardStatsData.totalCards?.[0]?.count || 0;
+    const newCardsCount = cardStatsData.newCards?.[0]?.count || 0;
+    const activeUsersCount = cardStatsData.activeUsers?.[0]?.count || 0;
+    
+    console.log(`🎴 Card stats: total=${totalCardsCount}, new=${newCardsCount}, active_users=${activeUsersCount}`);
 
     // Get space collaboration patterns
-    const collaborationPatterns = await Space.aggregate([
+    const collaborationStats = await Space.aggregate([
       {
-        $group: {
-          _id: null,
-          avgMembersPerSpace: { $avg: { $size: "$members" } },
-          publicSpaceCount: { $sum: { $cond: ["$isPublic", 1, 0] } },
-          privateSpaceCount: { $sum: { $cond: ["$isPublic", 0, 1] } },
-          totalSpaces: { $sum: 1 }
+        $facet: {
+          overview: [
+            {
+              $group: {
+                _id: null,
+                totalSpaces: { $sum: 1 },
+                publicSpaceCount: { $sum: { $cond: ["$isPublic", 1, 0] } },
+                privateSpaceCount: { $sum: { $cond: ["$isPublic", 0, 1] } },
+                avgMembersPerSpace: { $avg: { $size: "$members" } },
+                totalMembers: { $sum: { $size: "$members" } }
+              }
+            }
+          ],
+          spacesInPeriod: [
+            { $match: { createdAt: { $gte: dateThreshold } } },
+            { $count: "count" }
+          ]
         }
       }
     ]);
 
-    // Get connection patterns
-    const connectionPatterns = await Connection.aggregate([
-      {
-        $group: {
-          _id: "$userId",
-          connectionCount: { $sum: 1 }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          avgConnectionsPerUser: { $avg: "$connectionCount" },
-          totalConnections: { $sum: "$connectionCount" },
-          activeConnectors: { $sum: 1 }
-        }
-      }
-    ]);
+    const collaborationData = collaborationStats[0]?.overview?.[0] || {};
+    const newSpacesThisPeriod = collaborationStats[0]?.spacesInPeriod?.[0]?.count || 0;
 
+    console.log('🏢 Collaboration stats:', collaborationData);
+    console.log('📊 Debug - collaboration stats breakdown:');
+    console.log('  - totalSpaces:', collaborationData.totalSpaces);
+    console.log('  - publicSpaceCount:', collaborationData.publicSpaceCount);
+    console.log('  - privateSpaceCount:', collaborationData.privateSpaceCount);
+    console.log('  - avgMembersPerSpace:', collaborationData.avgMembersPerSpace);
+    console.log('  - totalMembers:', collaborationData.totalMembers);
+    console.log('  - newSpacesThisPeriod:', newSpacesThisPeriod);
+
+    // Get connection patterns with error handling
+    let connectionStats = {
+      totalConnections: 0,
+      avgConnectionsPerUser: 0,
+      activeConnectors: 0,
+      maxConnections: 0
+    };
+
+    try {
+      const connectionData = await Connection.aggregate([
+        {
+          $facet: {
+            totalConnections: [{ $count: "count" }],
+            userConnections: [
+              {
+                $group: {
+                  _id: "$userId",
+                  connectionCount: { $sum: 1 }
+                }
+              }
+            ],
+            newConnections: [
+              { $match: { createdAt: { $gte: dateThreshold } } },
+              { $count: "count" }
+            ]
+          }
+        }
+      ]);
+
+      const connectionsData = connectionData[0] || {};
+      const totalConnections = connectionsData.totalConnections?.[0]?.count || 0;
+      const userConnections = connectionsData.userConnections || [];
+      const newConnections = connectionsData.newConnections?.[0]?.count || 0;
+
+      connectionStats = {
+        totalConnections,
+        newConnectionsThisPeriod: newConnections,
+        avgConnectionsPerUser: userConnections.length > 0 ? 
+          Math.round((totalConnections / userConnections.length) * 100) / 100 : 0,
+        activeConnectors: userConnections.length,
+        maxConnections: userConnections.length > 0 ? 
+          Math.max(...userConnections.map(u => u.connectionCount)) : 0
+      };
+    } catch (error) {
+      console.error('⚠️ Error getting connection stats:', error.message);
+    }
+
+    console.log('🔗 Connection stats:', connectionStats);
+
+    // Build comprehensive analytics response
     const analytics = {
       users: {
         data: users,
@@ -616,15 +843,42 @@ exports.getUsersAndCardsAnalytics = async (req, res) => {
         currentPage: parseInt(page),
         totalPages: Math.ceil(totalUsers / limit)
       },
-      cardAnalytics,
-      collaborationPatterns: collaborationPatterns[0] || {},
-      connectionPatterns: connectionPatterns[0] || {}
+      cardAnalytics: {
+        // Data for overview tab
+        totalCards: totalCardsCount,
+        newCardsThisPeriod: newCardsCount,
+        activeUsers: activeUsersCount,
+        newUsersThisPeriod: users.filter(u => new Date(u.createdAt) >= dateThreshold).length,
+        avgCardsPerUser: totalUsers > 0 ? Math.round((totalCardsCount / totalUsers) * 100) / 100 : 0,
+        
+        // Card type distribution
+        cardTypeDistribution: cardStatsData.cardTypes || [],
+        
+        // Top creators for cards tab
+        ...cardCreators
+      },
+      collaborationPatterns: {
+        ...collaborationData,
+        newSpacesThisPeriod,
+        // Additional metrics
+        collaborationRate: collaborationData.totalSpaces > 0 ? 
+          Math.round((collaborationData.totalMembers / collaborationData.totalSpaces) * 100) / 100 : 0
+      },
+      connectionPatterns: connectionStats
     };
 
+    console.log('✅ Users & Cards analytics completed successfully');
+    console.log(`📊 Response summary: ${users.length} users, ${totalCardsCount} cards, ${connectionStats.totalConnections} connections`);
+
     res.json({ success: true, data: analytics });
+
   } catch (error) {
-    console.error('Users and cards analytics error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error('💥 Users and cards analytics error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
   }
 };
 
@@ -1270,6 +1524,380 @@ exports.getAuditLogs = async (req, res) => {
   } catch (error) {
     console.error('Get audit logs error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ===============================
+// EXPORT FUNCTIONALITY
+// ===============================
+
+// Export users and cards data in various formats
+exports.exportUsersCardsData = async (req, res) => {
+  try {
+    console.log('📊 Starting export of users and cards data...');
+    
+    const { 
+      format = 'json',
+      search = '', 
+      filterBy = 'all',
+      timeRange = '30d',
+      includeCards = true,
+      includeStats = true
+    } = req.query;
+
+    // Calculate date threshold
+    let dateThreshold;
+    switch (timeRange) {
+      case '7d':
+        dateThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        dateThreshold = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        break;
+      case '1y':
+        dateThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const activeUserThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    // Build search query
+    let searchQuery = {};
+    if (search) {
+      searchQuery = {
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+
+    // Apply filter
+    if (filterBy === 'active') {
+      searchQuery.lastLogin = { $gte: activeUserThreshold };
+    } else if (filterBy === 'inactive') {
+      searchQuery.$or = [
+        { lastLogin: { $lt: activeUserThreshold } },
+        { lastLogin: { $exists: false } }
+      ];
+    }
+
+    // Get users with extended data for export
+    const usersForExport = await User.aggregate([
+      { $match: searchQuery },
+      {
+        $lookup: {
+          from: "cards",
+          let: { userId: { $toString: "$_id" } },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$userId", "$$userId"] },
+                    { $eq: [{ $toString: "$userId" }, "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: "userCards"
+        }
+      },
+      {
+        $lookup: {
+          from: "spaces",
+          let: { userId: { $toString: "$_id" } },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$ownerId", "$$userId"] },
+                    { $eq: [{ $toString: "$ownerId" }, "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: "ownedSpaces"
+        }
+      },
+      {
+        $lookup: {
+          from: "connections",
+          let: { userId: { $toString: "$_id" } },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$userId", "$$userId"] },
+                    { $eq: [{ $toString: "$userId" }, "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: "userConnections"
+        }
+      },
+      {
+        $addFields: {
+          cardCount: { $size: "$userCards" },
+          spaceCount: { $size: "$ownedSpaces" },
+          connectionCount: { $size: "$userConnections" },
+          isActive: {
+            $cond: {
+              if: { 
+                $and: [
+                  { $ne: ["$lastLogin", null] },
+                  { $gte: ["$lastLogin", activeUserThreshold] }
+                ]
+              },
+              then: true,
+              else: false
+            }
+          },
+          recentCardsCount: {
+            $size: {
+              $filter: {
+                input: "$userCards",
+                cond: { $gte: ["$$this.createdAt", dateThreshold] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          email: 1,
+          createdAt: 1,
+          lastLogin: 1,
+          role: 1,
+          cardCount: 1,
+          spaceCount: 1,
+          connectionCount: 1,
+          recentCardsCount: 1,
+          isActive: 1,
+          suspended: { $ifNull: ["$suspended", false] },
+          // Include cards if requested
+          ...(includeCards === 'true' && {
+            cards: {
+              $map: {
+                input: "$userCards",
+                as: "card",
+                in: {
+                  id: "$$card._id",
+                  title: "$$card.title",
+                  type: "$$card.type",
+                  createdAt: "$$card.createdAt",
+                  spaceId: "$$card.spaceId"
+                }
+              }
+            }
+          })
+        }
+      },
+      { $sort: { createdAt: -1 } }
+    ]);
+
+    console.log(`📋 Prepared ${usersForExport.length} users for export`);
+
+    // Get statistics if requested
+    let statistics = {};
+    if (includeStats === 'true') {
+      const [totalCards, totalSpaces, totalConnections] = await Promise.all([
+        Card.countDocuments(),
+        Space.countDocuments(),
+        Connection.countDocuments()
+      ]);
+
+      statistics = {
+        exportInfo: {
+          generatedAt: new Date().toISOString(),
+          timeRange,
+          filterBy,
+          searchTerm: search,
+          totalUsersExported: usersForExport.length
+        },
+        platformStats: {
+          totalUsers: usersForExport.length,
+          activeUsers: usersForExport.filter(u => u.isActive).length,
+          totalCards,
+          totalSpaces,
+          totalConnections,
+          avgCardsPerUser: usersForExport.length > 0 ? 
+            Math.round((usersForExport.reduce((sum, u) => sum + u.cardCount, 0) / usersForExport.length) * 100) / 100 : 0
+        }
+      };
+    }
+
+    // Format data based on requested format
+    if (format === 'csv') {
+      // Convert to CSV format
+      const csvHeaders = [
+        'ID',
+        'Name', 
+        'Email',
+        'Role',
+        'Created Date',
+        'Last Login',
+        'Card Count',
+        'Space Count',
+        'Connection Count',
+        'Recent Cards',
+        'Active Status',
+        'Account Status'
+      ];
+
+      const csvRows = usersForExport.map(user => [
+        user._id.toString(),
+        user.name || '',
+        user.email || '',
+        user.role || 'user',
+        user.createdAt ? new Date(user.createdAt).toISOString().split('T')[0] : '',
+        user.lastLogin ? new Date(user.lastLogin).toISOString().split('T')[0] : 'Never',
+        user.cardCount || 0,
+        user.spaceCount || 0,
+        user.connectionCount || 0,
+        user.recentCardsCount || 0,
+        user.isActive ? 'Active' : 'Inactive',
+        user.suspended ? 'Suspended' : 'Normal'
+      ]);
+
+      const csvContent = [csvHeaders, ...csvRows]
+        .map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="users-cards-export-${Date.now()}.csv"`);
+      res.send(csvContent);
+
+    } else {
+      // JSON format
+      const exportData = {
+        ...statistics,
+        users: usersForExport
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="users-cards-export-${Date.now()}.json"`);
+      res.json(exportData);
+    }
+
+    console.log(`✅ Export completed successfully in ${format} format`);
+
+  } catch (error) {
+    console.error('💥 Export users cards data error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
+  }
+};
+
+// Export user data for a specific user
+exports.exportUserData = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { format = 'json' } = req.query;
+
+    console.log(`📋 Exporting data for user: ${id}`);
+
+    // Get user with all related data
+    const user = await User.findById(id).select('-password -googleId');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Get user's cards
+    const userCards = await Card.find({
+      $or: [
+        { userId: id },
+        { userId: id.toString() }
+      ]
+    }).select('-__v');
+
+    // Get user's spaces
+    const userSpaces = await Space.find({ ownerId: id }).select('-__v');
+
+    // Get user's connections
+    const userConnections = await Connection.find({
+      $or: [
+        { userId: id },
+        { userId: id.toString() }
+      ]
+    }).select('-__v');
+
+    // Get user's AI conversations
+    const userAIChats = await AIChatConversation.find({ userId: id })
+      .select('-messages.metadata -__v')
+      .limit(50); // Limit for performance
+
+    const exportData = {
+      exportInfo: {
+        userId: id,
+        userName: user.name,
+        userEmail: user.email,
+        generatedAt: new Date().toISOString(),
+        dataVersion: '1.0'
+      },
+      userData: user.toObject(),
+      statistics: {
+        totalCards: userCards.length,
+        totalSpaces: userSpaces.length,
+        totalConnections: userConnections.length,
+        totalAIConversations: userAIChats.length
+      },
+      cards: userCards,
+      spaces: userSpaces,
+      connections: userConnections,
+      aiConversations: userAIChats
+    };
+
+    if (format === 'csv') {
+      // Simple CSV for user data
+      const csvContent = [
+        'Field,Value',
+        `User ID,"${user._id}"`,
+        `Name,"${user.name || ''}"`,
+        `Email,"${user.email || ''}"`,
+        `Role,"${user.role || 'user'}"`,
+        `Created,"${user.createdAt}"`,
+        `Last Login,"${user.lastLogin || 'Never'}"`,
+        `Total Cards,"${userCards.length}"`,
+        `Total Spaces,"${userSpaces.length}"`,
+        `Total Connections,"${userConnections.length}"`,
+        `Total AI Conversations,"${userAIChats.length}"`
+      ].join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="user-${id}-export-${Date.now()}.csv"`);
+      res.send(csvContent);
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="user-${id}-export-${Date.now()}.json"`);
+      res.json(exportData);
+    }
+
+    console.log(`✅ User data export completed for: ${id}`);
+
+  } catch (error) {
+    console.error('💥 Export user data error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
   }
 };
 

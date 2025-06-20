@@ -230,6 +230,14 @@ router.get('/users/:id/export',
 );
 
 // ===============================
+// EXPORT ROUTES
+// ===============================
+router.get('/export/users-cards', 
+  auditLog('export_data', 'users_cards'), 
+  adminController.exportUsersCardsData
+);
+
+// ===============================
 // PAGE 5: AI MANAGEMENT
 // ===============================
 router.get('/ai/conversations', 
