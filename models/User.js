@@ -95,6 +95,18 @@ const userSchema = new mongoose.Schema({
   sessionTimeout: {
     type: Number,
     default: 30 // minutes
+  },
+  suspended: {
+    type: Boolean,
+    default: false
+  },
+  verified: {
+    type: Boolean,
+    default: false
+  },
+  passwordResetRequired: {
+    type: Boolean,
+    default: false
   }
 }, { timestamps: true });
 

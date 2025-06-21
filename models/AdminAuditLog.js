@@ -19,10 +19,21 @@ const adminAuditLogSchema = new mongoose.Schema({
       'logout',
       'view_dashboard',
       'view_user_data',
+      'view_user_management',
+      'view_user_details',
       'edit_user_data',
+      'update_user',
       'delete_user',
       'suspend_user',
       'activate_user',
+      'toggle_user_status',
+      'reset_user_password',
+      'bulk_user_action',
+      'bulk_suspend_users',
+      'bulk_activate_users',
+      'bulk_verify_users',
+      'bulk_delete_users',
+      'export_user_data',
       'view_card_data',
       'edit_card_data',
       'delete_card',
@@ -35,7 +46,9 @@ const adminAuditLogSchema = new mongoose.Schema({
       'system_config_change',
       'bulk_operation',
       'api_key_change',
-      'security_setting_change'
+      'security_setting_change',
+      'unauthorized_access_attempt',
+      'session_timeout'
     ]
   },
   targetType: {

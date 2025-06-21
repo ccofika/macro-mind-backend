@@ -41,8 +41,27 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
     
+    // Check if user is suspended
+    if (user.suspended) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Account suspended. Please contact administrator.',
+        suspended: true 
+      });
+    }
+    
+    // Check if account is locked due to failed login attempts
+    if (user.lockedUntil && user.lockedUntil > Date.now()) {
+      return res.status(423).json({ 
+        success: false, 
+        message: 'Account temporarily locked due to too many failed login attempts.',
+        lockedUntil: user.lockedUntil
+      });
+    }
+    
     // Update last login time
     user.lastLogin = new Date();
+    user.loginAttempts = 0; // Reset login attempts on successful login
     await user.save();
     
     // Generate JWT token
@@ -102,6 +121,15 @@ exports.googleLogin = async (req, res) => {
         role: 'user'
       });
     } else {
+      // Check if existing user is suspended
+      if (user.suspended) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Account suspended. Please contact administrator.',
+          suspended: true 
+        });
+      }
+      
       // Update existing user with latest Google info
       user.name = name;
       user.picture = picture;

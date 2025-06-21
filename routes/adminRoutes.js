@@ -206,32 +206,52 @@ router.get('/analytics/ai',
   adminController.getAIAnalytics
 );
 
+router.get('/analytics/ai/trends', 
+  auditLog('view_ai_chats'), 
+  adminController.getAITrends
+);
+
 // ===============================
 // PAGE 4: USER MANAGEMENT
 // ===============================
 router.get('/users', 
-  auditLog('view_user_data'), 
-  adminController.getAllUsers
+  auditLog('view_user_management'), 
+  adminController.getUserManagement
 );
 
-router.put('/users/:id', 
-  auditLog('edit_user_data', 'user'), 
+router.get('/users/:userId', 
+  auditLog('view_user_details'), 
+  adminController.getUserDetails
+);
+
+router.put('/users/:userId', 
+  auditLog('update_user'), 
   adminController.updateUser
 );
 
-router.post('/users/:id/toggle-status', 
-  auditLog('suspend_user', 'user'), 
+router.post('/users/:userId/toggle-status', 
+  auditLog('toggle_user_status'), 
   adminController.toggleUserStatus
 );
 
-router.delete('/users/:id', 
-  auditLog('delete_user', 'user'), 
+router.delete('/users/:userId', 
+  auditLog('delete_user'), 
   adminController.deleteUser
 );
 
-router.get('/users/:id/export', 
-  auditLog('export_data', 'user'), 
+router.post('/users/bulk-action', 
+  auditLog('bulk_user_action'), 
+  adminController.bulkUserAction
+);
+
+router.get('/users/:userId/export', 
+  auditLog('export_user_data'), 
   adminController.exportUserData
+);
+
+router.post('/users/:userId/reset-password', 
+  auditLog('reset_user_password'), 
+  adminController.resetUserPassword
 );
 
 // ===============================
@@ -240,6 +260,11 @@ router.get('/users/:id/export',
 router.get('/export/users-cards', 
   auditLog('export_data', 'users_cards'), 
   adminController.exportUsersCardsData
+);
+
+router.get('/export/ai-analytics', 
+  auditLog('export_data', 'ai_analytics'), 
+  adminController.exportAIAnalyticsData
 );
 
 // ===============================

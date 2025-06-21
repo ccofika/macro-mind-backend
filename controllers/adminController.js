@@ -1192,8 +1192,60 @@ exports.getUsersCardsTrends = async (req, res) => {
 // Get comprehensive AI usage analytics
 exports.getAIAnalytics = async (req, res) => {
   try {
-    // Get AI usage by mode
+    console.log('🚀 Starting AI Analytics request...');
+    
+    const { 
+      timeRange = '30d',
+      page = 1,
+      limit = 20,
+      search = '',
+      sortBy = 'lastActivity',
+      sortOrder = 'desc',
+      filterBy = 'all',
+      mode = 'all'
+    } = req.query;
+    
+    const skip = (page - 1) * limit;
+    console.log(`📋 Request parameters: timeRange=${timeRange}, page=${page}, limit=${limit}, mode=${mode}`);
+
+    // Calculate date range based on timeRange parameter
+    let dateThreshold;
+    switch (timeRange) {
+      case '1d':
+        dateThreshold = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        break;
+      case '7d':
+        dateThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        dateThreshold = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        break;
+      case '1y':
+        dateThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    // Get comprehensive overview stats
+    const [totalConversations, totalMessages, recentConversations, recentMessages] = await Promise.all([
+      AIChatConversation.countDocuments(),
+      AIChatConversation.aggregate([
+        { $group: { _id: null, total: { $sum: "$stats.messageCount" } } }
+      ]).then(result => result[0]?.total || 0),
+      AIChatConversation.countDocuments({ createdAt: { $gte: dateThreshold } }),
+      AIChatConversation.aggregate([
+        { $match: { updatedAt: { $gte: dateThreshold } } },
+        { $group: { _id: null, total: { $sum: "$stats.messageCount" } } }
+      ]).then(result => result[0]?.total || 0)
+    ]);
+
+    // Get AI usage by mode with time range filter
     const usageByMode = await AIChatConversation.aggregate([
+      { $match: { createdAt: { $gte: dateThreshold } } },
       { $unwind: "$messages" },
       {
         $group: {
@@ -1201,23 +1253,30 @@ exports.getAIAnalytics = async (req, res) => {
           count: { $sum: 1 },
           avgConfidence: { $avg: "$messages.confidence" },
           avgProcessingTime: { $avg: "$messages.metadata.processingTime" },
-          totalTokens: { $sum: "$messages.metadata.tokensUsed" }
+          totalTokens: { $sum: "$messages.metadata.tokensUsed" },
+          uniqueUsers: { $addToSet: "$userId" }
+        }
+      },
+      {
+        $addFields: {
+          uniqueUserCount: { $size: "$uniqueUsers" }
         }
       },
       { $sort: { count: -1 } }
     ]);
 
-    // Get daily AI usage trends (last 30 days)
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    // Get daily AI usage trends
     const dailyUsageTrends = await AIChatConversation.aggregate([
-      { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+      { $match: { createdAt: { $gte: dateThreshold } } },
       { $unwind: "$messages" },
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$messages.timestamp" } },
           messageCount: { $sum: 1 },
           uniqueUsers: { $addToSet: "$userId" },
-          totalTokens: { $sum: "$messages.metadata.tokensUsed" }
+          totalTokens: { $sum: "$messages.metadata.tokensUsed" },
+          avgConfidence: { $avg: "$messages.confidence" },
+          avgProcessingTime: { $avg: "$messages.metadata.processingTime" }
         }
       },
       {
@@ -1228,8 +1287,8 @@ exports.getAIAnalytics = async (req, res) => {
       { $sort: { _id: 1 } }
     ]);
 
-    // Get user adoption patterns
-    const userAdoption = await AIChatConversation.aggregate([
+    // Get user adoption patterns with pagination and search
+    let userAdoptionQuery = [
       {
         $group: {
           _id: "$userId",
@@ -1237,20 +1296,35 @@ exports.getAIAnalytics = async (req, res) => {
           messageCount: { $sum: "$stats.messageCount" },
           totalTokens: { $sum: "$stats.totalTokensUsed" },
           avgResponseTime: { $avg: "$stats.averageResponseTime" },
-          lastActivity: { $max: "$updatedAt" }
+          lastActivity: { $max: "$updatedAt" },
+          firstActivity: { $min: "$createdAt" }
         }
       },
-      { $sort: { messageCount: -1 } },
-      { $limit: 50 },
       {
         $lookup: {
           from: "users",
-          localField: "_id",
-          foreignField: "_id",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$_id", "$$userId"] },
+                    { $eq: [{ $toString: "$_id" }, { $toString: "$$userId" }] },
+                    { $eq: ["$email", "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
           as: "user"
         }
       },
-      { $unwind: "$user" },
+      {
+        $addFields: {
+          userDetails: { $arrayElemAt: ["$user", 0] }
+        }
+      },
       {
         $project: {
           userId: "$_id",
@@ -1259,14 +1333,42 @@ exports.getAIAnalytics = async (req, res) => {
           totalTokens: 1,
           avgResponseTime: 1,
           lastActivity: 1,
-          userName: "$user.name",
-          userEmail: "$user.email"
+          firstActivity: 1,
+          userName: { $ifNull: ["$userDetails.name", "Unknown User"] },
+          userEmail: { $ifNull: ["$userDetails.email", "unknown@email.com"] }
         }
       }
+    ];
+
+    // Add search filter if provided
+    if (search) {
+      userAdoptionQuery.push({
+        $match: {
+          $or: [
+            { userName: { $regex: search, $options: 'i' } },
+            { userEmail: { $regex: search, $options: 'i' } }
+          ]
+        }
+      });
+    }
+
+    // Get total count for pagination
+    const totalUserAdoptionCount = await AIChatConversation.aggregate([
+      ...userAdoptionQuery,
+      { $count: "total" }
+    ]).then(result => result[0]?.total || 0);
+
+    // Get paginated user adoption data
+    const userAdoption = await AIChatConversation.aggregate([
+      ...userAdoptionQuery,
+      { $sort: { [sortBy]: sortOrder === 'desc' ? -1 : 1 } },
+      { $skip: skip },
+      { $limit: parseInt(limit) }
     ]);
 
     // Get performance metrics
     const performanceMetrics = await AIChatConversation.aggregate([
+      { $match: { createdAt: { $gte: dateThreshold } } },
       { $unwind: "$messages" },
       {
         $group: {
@@ -1277,25 +1379,34 @@ exports.getAIAnalytics = async (req, res) => {
           totalMessages: { $sum: 1 },
           successfulMessages: { 
             $sum: { $cond: [{ $gte: ["$messages.confidence", 70] }, 1, 0] }
-          }
+          },
+          totalTokens: { $sum: "$messages.metadata.tokensUsed" }
         }
       },
       {
         $addFields: {
-          successRate: { $multiply: [{ $divide: ["$successfulMessages", "$totalMessages"] }, 100] }
+          successRate: { $multiply: [{ $divide: ["$successfulMessages", "$totalMessages"] }, 100] },
+          estimatedCost: { $multiply: ["$totalTokens", 0.000002] } // Rough estimate: $0.002 per 1k tokens
         }
       }
     ]);
 
     // Get error patterns
     const errorPatterns = await AIChatConversation.aggregate([
+      { $match: { createdAt: { $gte: dateThreshold } } },
       { $unwind: "$messages" },
       { $match: { "messages.type": "error" } },
       {
         $group: {
           _id: "$messages.content",
           count: { $sum: 1 },
-          latestOccurrence: { $max: "$messages.timestamp" }
+          latestOccurrence: { $max: "$messages.timestamp" },
+          affectedUsers: { $addToSet: "$userId" }
+        }
+      },
+      {
+        $addFields: {
+          affectedUserCount: { $size: "$affectedUsers" }
         }
       },
       { $sort: { count: -1 } },
@@ -1304,6 +1415,7 @@ exports.getAIAnalytics = async (req, res) => {
 
     // Get feature usage statistics
     const featureUsage = await AIChatConversation.aggregate([
+      { $match: { createdAt: { $gte: dateThreshold } } },
       { $unwind: "$messages" },
       {
         $group: {
@@ -1311,32 +1423,337 @@ exports.getAIAnalytics = async (req, res) => {
             mode: "$messages.mode",
             date: { $dateToString: { format: "%Y-%m-%d", date: "$messages.timestamp" } }
           },
-          count: { $sum: 1 }
+          count: { $sum: 1 },
+          totalTokens: { $sum: "$messages.metadata.tokensUsed" }
         }
       },
       {
         $group: {
           _id: "$_id.mode",
-          dailyUsage: { $push: { date: "$_id.date", count: "$count" } },
-          totalUsage: { $sum: "$count" }
+          dailyUsage: { $push: { date: "$_id.date", count: "$count", tokens: "$totalTokens" } },
+          totalUsage: { $sum: "$count" },
+          totalTokens: { $sum: "$totalTokens" }
         }
       },
       { $sort: { totalUsage: -1 } }
     ]);
 
+    // Get recent conversations for activity feed
+    const recentActivity = await AIChatConversation.find({ 
+      updatedAt: { $gte: dateThreshold } 
+    })
+    .populate('userId', 'name email')
+    .sort({ updatedAt: -1 })
+    .limit(10)
+    .select('title userId createdAt updatedAt stats');
+
     const aiAnalytics = {
+      overview: {
+        totalConversations,
+        totalMessages,
+        recentConversations,
+        recentMessages,
+        totalTokens: performanceMetrics[0]?.totalTokens || 0,
+        estimatedCost: performanceMetrics[0]?.estimatedCost || 0,
+        avgResponseTime: performanceMetrics[0]?.avgResponseTime || 0,
+        successRate: performanceMetrics[0]?.successRate || 0
+      },
       usageByMode,
       dailyTrends: dailyUsageTrends,
-      userAdoption,
+      userAdoption: {
+        data: userAdoption,
+        totalCount: totalUserAdoptionCount,
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(totalUserAdoptionCount / limit)
+      },
       performanceMetrics: performanceMetrics[0] || {},
       errorPatterns,
-      featureUsage
+      featureUsage,
+      recentActivity
     };
+
+    console.log('✅ AI Analytics data compiled successfully');
+    console.log(`📊 Overview: ${totalConversations} conversations, ${totalMessages} messages`);
+    console.log(`👥 User adoption: ${userAdoption.length} users on page ${page}`);
 
     res.json({ success: true, data: aiAnalytics });
   } catch (error) {
-    console.error('AI analytics error:', error);
+    console.error('💥 AI analytics error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get AI trends analytics
+exports.getAITrends = async (req, res) => {
+  try {
+    console.log('🚀 Starting AI Trends Analytics...');
+    
+    const { timeRange = '30d' } = req.query;
+    
+    // Calculate date ranges
+    const now = new Date();
+    const getRangeDate = (range) => {
+      const multipliers = { '1d': 1, '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
+      const days = multipliers[range] || 30;
+      return new Date(now - days * 24 * 60 * 60 * 1000);
+    };
+    
+    const startDate = getRangeDate(timeRange);
+    
+    console.log(`📊 Analyzing AI trends for ${timeRange}`);
+
+    // Generate time series data for AI usage
+    const [conversationTrends, messageTrends, tokenTrends, modeTrends] = await Promise.all([
+      // Conversation creation trends
+      AIChatConversation.aggregate([
+        {
+          $match: { createdAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$createdAt"
+              }
+            },
+            count: { $sum: 1 },
+            uniqueUsers: { $addToSet: "$userId" },
+            date: { $first: "$createdAt" }
+          }
+        },
+        {
+          $addFields: {
+            uniqueUserCount: { $size: "$uniqueUsers" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Message activity trends
+      AIChatConversation.aggregate([
+        {
+          $match: { updatedAt: { $gte: startDate } }
+        },
+        { $unwind: "$messages" },
+        {
+          $match: { "messages.timestamp": { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$messages.timestamp"
+              }
+            },
+            count: { $sum: 1 },
+            avgConfidence: { $avg: "$messages.confidence" },
+            avgProcessingTime: { $avg: "$messages.metadata.processingTime" },
+            date: { $first: "$messages.timestamp" }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Token usage trends
+      AIChatConversation.aggregate([
+        {
+          $match: { updatedAt: { $gte: startDate } }
+        },
+        { $unwind: "$messages" },
+        {
+          $match: { "messages.timestamp": { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                date: "$messages.timestamp"
+              }
+            },
+            totalTokens: { $sum: "$messages.metadata.tokensUsed" },
+            avgTokensPerMessage: { $avg: "$messages.metadata.tokensUsed" },
+            messageCount: { $sum: 1 },
+            date: { $first: "$messages.timestamp" }
+          }
+        },
+        {
+          $addFields: {
+            estimatedCost: { $multiply: ["$totalTokens", 0.000002] }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // Mode usage trends
+      AIChatConversation.aggregate([
+        {
+          $match: { updatedAt: { $gte: startDate } }
+        },
+        { $unwind: "$messages" },
+        {
+          $match: { "messages.timestamp": { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: {
+              mode: "$messages.mode",
+              date: {
+                $dateToString: {
+                  format: timeRange === '1y' ? "%Y-%U" : "%Y-%m-%d",
+                  date: "$messages.timestamp"
+                }
+              }
+            },
+            count: { $sum: 1 },
+            avgConfidence: { $avg: "$messages.confidence" },
+            totalTokens: { $sum: "$messages.metadata.tokensUsed" }
+          }
+        },
+        {
+          $group: {
+            _id: "$_id.mode",
+            dailyData: { 
+              $push: { 
+                date: "$_id.date", 
+                count: "$count", 
+                avgConfidence: "$avgConfidence",
+                totalTokens: "$totalTokens"
+              } 
+            },
+            totalUsage: { $sum: "$count" },
+            totalTokens: { $sum: "$totalTokens" }
+          }
+        },
+        { $sort: { totalUsage: -1 } }
+      ])
+    ]);
+
+    // Calculate growth rates and insights
+    const calculateGrowthRate = (trends) => {
+      if (trends.length < 2) return 0;
+      const recent = trends.slice(-7).reduce((sum, item) => sum + item.count, 0);
+      const previous = trends.slice(-14, -7).reduce((sum, item) => sum + item.count, 0);
+      return previous > 0 ? Math.round(((recent - previous) / previous) * 100) : 0;
+    };
+
+    // Performance analysis
+    const [performanceStats, userEngagementStats] = await Promise.all([
+      AIChatConversation.aggregate([
+        {
+          $match: { updatedAt: { $gte: startDate } }
+        },
+        { $unwind: "$messages" },
+        {
+          $group: {
+            _id: null,
+            avgResponseTime: { $avg: "$messages.metadata.processingTime" },
+            avgConfidence: { $avg: "$messages.confidence" },
+            avgTokensPerMessage: { $avg: "$messages.metadata.tokensUsed" },
+            totalMessages: { $sum: 1 },
+            successfulMessages: { 
+              $sum: { $cond: [{ $gte: ["$messages.confidence", 70] }, 1, 0] }
+            },
+            totalTokens: { $sum: "$messages.metadata.tokensUsed" }
+          }
+        },
+        {
+          $addFields: {
+            successRate: { $multiply: [{ $divide: ["$successfulMessages", "$totalMessages"] }, 100] },
+            estimatedCost: { $multiply: ["$totalTokens", 0.000002] }
+          }
+        }
+      ]),
+
+      AIChatConversation.aggregate([
+        {
+          $match: { updatedAt: { $gte: startDate } }
+        },
+        {
+          $group: {
+            _id: "$userId",
+            conversationCount: { $sum: 1 },
+            messageCount: { $sum: "$stats.messageCount" },
+            avgSessionLength: { $avg: "$stats.messageCount" }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalUsers: { $sum: 1 },
+            avgConversationsPerUser: { $avg: "$conversationCount" },
+            avgMessagesPerUser: { $avg: "$messageCount" },
+            avgSessionLength: { $avg: "$avgSessionLength" }
+          }
+        }
+      ])
+    ]);
+
+    const trends = {
+      timeRange,
+      dateRange: {
+        start: startDate.toISOString(),
+        end: now.toISOString()
+      },
+      series: {
+        conversations: conversationTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          uniqueUsers: item.uniqueUserCount,
+          timestamp: new Date(item.date).getTime()
+        })),
+        messages: messageTrends.map(item => ({
+          date: item._id,
+          value: item.count,
+          avgConfidence: Math.round(item.avgConfidence || 0),
+          avgProcessingTime: Math.round(item.avgProcessingTime || 0),
+          timestamp: new Date(item.date).getTime()
+        })),
+        tokens: tokenTrends.map(item => ({
+          date: item._id,
+          value: item.totalTokens,
+          avgPerMessage: Math.round(item.avgTokensPerMessage || 0),
+          estimatedCost: item.estimatedCost,
+          timestamp: new Date(item.date).getTime()
+        })),
+        modes: modeTrends
+      },
+      insights: {
+        conversationGrowthRate: calculateGrowthRate(conversationTrends),
+        messageGrowthRate: calculateGrowthRate(messageTrends),
+        performance: performanceStats[0] || {},
+        engagement: userEngagementStats[0] || {},
+        topMode: modeTrends[0]?._id || 'N/A',
+        efficiency: {
+          avgResponseTime: performanceStats[0]?.avgResponseTime || 0,
+          successRate: performanceStats[0]?.successRate || 0,
+          costEfficiency: performanceStats[0]?.estimatedCost || 0
+        }
+      },
+      summary: {
+        totalDataPoints: conversationTrends.length + messageTrends.length + tokenTrends.length,
+        analysisQuality: conversationTrends.length > 5 ? 'high' : conversationTrends.length > 2 ? 'medium' : 'low'
+      }
+    };
+
+    console.log('📈 AI Trends analysis completed:', {
+      conversationDataPoints: conversationTrends.length,
+      messageDataPoints: messageTrends.length,
+      tokenDataPoints: tokenTrends.length,
+      modeAnalysis: modeTrends.length
+    });
+
+    res.json({ success: true, data: trends });
+
+  } catch (error) {
+    console.error('💥 AI Trends analytics error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
   }
 };
 
@@ -1451,100 +1868,7 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// Suspend/Activate user
-exports.toggleUserStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { suspend } = req.body;
 
-    const user = await User.findById(id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    if (suspend) {
-      user.lockedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-    } else {
-      user.lockedUntil = null;
-      user.loginAttempts = 0;
-    }
-
-    await user.save();
-
-    res.json({ 
-      success: true, 
-      message: suspend ? 'User suspended successfully' : 'User activated successfully',
-      data: user
-    });
-  } catch (error) {
-    console.error('Toggle user status error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Delete user and all associated data
-exports.deleteUser = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check if user exists
-    const user = await User.findById(id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    // Delete all associated data
-    await Promise.all([
-      Card.deleteMany({ userId: id }),
-      Connection.deleteMany({ userId: id }),
-      Space.deleteMany({ ownerId: id }),
-      Invitation.deleteMany({ $or: [{ inviterUserId: id }, { inviteeUserId: id }] }),
-      AIChatConversation.deleteMany({ userId: id }),
-      User.findByIdAndDelete(id)
-    ]);
-
-    res.json({ success: true, message: 'User and all associated data deleted successfully' });
-  } catch (error) {
-    console.error('Delete user error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Export user data (GDPR compliant)
-exports.exportUserData = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const [user, cards, spaces, connections, invitations, aiChats] = await Promise.all([
-      User.findById(id).select('-password -googleId'),
-      Card.find({ userId: id }),
-      Space.find({ ownerId: id }),
-      Connection.find({ userId: id }),
-      Invitation.find({ $or: [{ inviterUserId: id }, { inviteeUserId: id }] }),
-      AIChatConversation.find({ userId: id })
-    ]);
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    const exportData = {
-      user,
-      cards,
-      spaces,
-      connections,
-      invitations,
-      aiChats,
-      exportedAt: new Date(),
-      exportedBy: req.admin.email
-    };
-
-    res.json({ success: true, data: exportData });
-  } catch (error) {
-    console.error('Export user data error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
 
 // ===============================
 // PAGE 5: AI MANAGEMENT
@@ -2203,5 +2527,919 @@ exports.exportUserData = async (req, res) => {
     });
   }
 };
+
+// Export AI analytics data
+exports.exportAIAnalyticsData = async (req, res) => {
+  try {
+    console.log('📊 Starting export of AI analytics data...');
+    
+    const { 
+      format = 'json',
+      search = '', 
+      filterBy = 'all',
+      timeRange = '30d',
+      mode = 'all',
+      includeStats = true
+    } = req.query;
+
+    // Calculate date threshold
+    let dateThreshold;
+    switch (timeRange) {
+      case '1d':
+        dateThreshold = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        break;
+      case '7d':
+        dateThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        dateThreshold = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        break;
+      case '1y':
+        dateThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        dateThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    // Get AI conversations for export
+    let query = { createdAt: { $gte: dateThreshold } };
+    
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { 'messages.content': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const conversationsForExport = await AIChatConversation.aggregate([
+      { $match: query },
+      {
+        $lookup: {
+          from: "users",
+          let: { userId: "$userId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$_id", "$$userId"] },
+                    { $eq: [{ $toString: "$_id" }, { $toString: "$$userId" }] },
+                    { $eq: ["$email", "$$userId"] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: "userInfo"
+        }
+      },
+      {
+        $addFields: {
+          userDetails: { $arrayElemAt: ["$userInfo", 0] },
+          messageCount: { $size: "$messages" },
+          totalTokens: { $sum: "$messages.metadata.tokensUsed" },
+          avgConfidence: { $avg: "$messages.confidence" },
+          avgResponseTime: { $avg: "$messages.metadata.processingTime" }
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          userId: 1,
+          userName: { $ifNull: ["$userDetails.name", "Unknown User"] },
+          userEmail: { $ifNull: ["$userDetails.email", "unknown@email.com"] },
+          createdAt: 1,
+          updatedAt: 1,
+          messageCount: 1,
+          totalTokens: 1,
+          avgConfidence: 1,
+          avgResponseTime: 1,
+          stats: 1,
+          messages: {
+            $map: {
+              input: "$messages",
+              as: "msg",
+              in: {
+                type: "$$msg.type",
+                content: "$$msg.content",
+                mode: "$$msg.mode",
+                timestamp: "$$msg.timestamp",
+                confidence: "$$msg.confidence",
+                tokensUsed: "$$msg.metadata.tokensUsed",
+                processingTime: "$$msg.metadata.processingTime"
+              }
+            }
+          }
+        }
+      },
+      { $sort: { updatedAt: -1 } }
+    ]);
+
+    console.log(`📋 Prepared ${conversationsForExport.length} conversations for export`);
+
+    // Get comprehensive analytics if requested
+    let analytics = {};
+    if (includeStats === 'true') {
+      const [usageByMode, performanceMetrics, errorPatterns] = await Promise.all([
+        // Usage by mode
+        AIChatConversation.aggregate([
+          { $match: { createdAt: { $gte: dateThreshold } } },
+          { $unwind: "$messages" },
+          {
+            $group: {
+              _id: "$messages.mode",
+              count: { $sum: 1 },
+              avgConfidence: { $avg: "$messages.confidence" },
+              avgProcessingTime: { $avg: "$messages.metadata.processingTime" },
+              totalTokens: { $sum: "$messages.metadata.tokensUsed" },
+              uniqueUsers: { $addToSet: "$userId" }
+            }
+          },
+          {
+            $addFields: {
+              uniqueUserCount: { $size: "$uniqueUsers" }
+            }
+          },
+          { $sort: { count: -1 } }
+        ]),
+
+        // Performance metrics
+        AIChatConversation.aggregate([
+          { $match: { createdAt: { $gte: dateThreshold } } },
+          { $unwind: "$messages" },
+          {
+            $group: {
+              _id: null,
+              avgResponseTime: { $avg: "$messages.metadata.processingTime" },
+              avgTokensPerMessage: { $avg: "$messages.metadata.tokensUsed" },
+              avgConfidence: { $avg: "$messages.confidence" },
+              totalMessages: { $sum: 1 },
+              successfulMessages: { 
+                $sum: { $cond: [{ $gte: ["$messages.confidence", 70] }, 1, 0] }
+              },
+              totalTokens: { $sum: "$messages.metadata.tokensUsed" }
+            }
+          },
+          {
+            $addFields: {
+              successRate: { $multiply: [{ $divide: ["$successfulMessages", "$totalMessages"] }, 100] },
+              estimatedCost: { $multiply: ["$totalTokens", 0.000002] }
+            }
+          }
+        ]),
+
+        // Error patterns
+        AIChatConversation.aggregate([
+          { $match: { createdAt: { $gte: dateThreshold } } },
+          { $unwind: "$messages" },
+          { $match: { "messages.type": "error" } },
+          {
+            $group: {
+              _id: "$messages.content",
+              count: { $sum: 1 },
+              latestOccurrence: { $max: "$messages.timestamp" },
+              affectedUsers: { $addToSet: "$userId" }
+            }
+          },
+          {
+            $addFields: {
+              affectedUserCount: { $size: "$affectedUsers" }
+            }
+          },
+          { $sort: { count: -1 } },
+          { $limit: 10 }
+        ])
+      ]);
+
+      analytics = {
+        exportInfo: {
+          generatedAt: new Date().toISOString(),
+          timeRange,
+          filterBy,
+          searchTerm: search,
+          totalConversationsExported: conversationsForExport.length
+        },
+        summary: {
+          totalConversations: conversationsForExport.length,
+          totalMessages: conversationsForExport.reduce((sum, conv) => sum + (conv.messageCount || 0), 0),
+          totalTokens: conversationsForExport.reduce((sum, conv) => sum + (conv.totalTokens || 0), 0),
+          avgConfidence: conversationsForExport.length > 0 ? 
+            conversationsForExport.reduce((sum, conv) => sum + (conv.avgConfidence || 0), 0) / conversationsForExport.length : 0,
+                     avgResponseTime: conversationsForExport.length > 0 ? 
+             conversationsForExport.reduce((sum, conv) => sum + (conv.avgResponseTime || 0), 0) / conversationsForExport.length : 0
+        },
+        usageByMode,
+        performanceMetrics: performanceMetrics[0] || {},
+        errorPatterns
+      };
+    }
+
+    // Format data based on requested format
+    if (format === 'csv') {
+      // Convert to CSV format
+      const csvHeaders = [
+        'Conversation ID',
+        'Title',
+        'User Name', 
+        'User Email',
+        'Created Date',
+        'Last Updated',
+        'Message Count',
+        'Total Tokens',
+        'Avg Confidence (%)',
+        'Avg Response Time (ms)',
+        'Modes Used'
+      ];
+
+      const csvRows = conversationsForExport.map(conv => [
+        conv._id.toString(),
+        conv.title || 'Untitled',
+        conv.userName || 'Unknown',
+        conv.userEmail || 'unknown@email.com',
+        conv.createdAt ? new Date(conv.createdAt).toISOString().split('T')[0] : '',
+        conv.updatedAt ? new Date(conv.updatedAt).toISOString().split('T')[0] : '',
+        conv.messageCount || 0,
+        conv.totalTokens || 0,
+        Math.round(conv.avgConfidence || 0),
+        Math.round(conv.avgResponseTime || 0),
+        [...new Set(conv.messages?.map(m => m.mode) || [])].join('; ')
+      ]);
+
+      const csvContent = [csvHeaders, ...csvRows]
+        .map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="ai-analytics-export-${Date.now()}.csv"`);
+      res.send(csvContent);
+
+    } else {
+      // JSON format
+      const exportData = {
+        ...analytics,
+        conversations: conversationsForExport
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="ai-analytics-export-${Date.now()}.json"`);
+      res.json(exportData);
+    }
+
+    console.log(`✅ AI Analytics export completed successfully in ${format} format`);
+
+  } catch (error) {
+    console.error('💥 Export AI analytics data error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : 'Internal server error'
+    });
+  }
+};
+
+// ===============================
+// PAGE 4: USER MANAGEMENT
+// ===============================
+
+// Get all users with pagination, search, and filtering
+exports.getUserManagement = async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 20, 
+      search = '', 
+      sortBy = 'createdAt', 
+      sortOrder = 'desc', 
+      filter = 'all' 
+    } = req.query;
+
+    // Build search query
+    let searchQuery = {};
+    if (search) {
+      searchQuery = {
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+
+    // Build filter query
+    let filterQuery = {};
+    const activeThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    
+    switch (filter) {
+      case 'active':
+        filterQuery.lastLogin = { $gte: activeThreshold };
+        break;
+      case 'inactive':
+        filterQuery = {
+          $or: [
+            { lastLogin: { $lt: activeThreshold } },
+            { lastLogin: null }
+          ]
+        };
+        break;
+      case 'suspended':
+        filterQuery.suspended = true;
+        break;
+      case 'verified':
+        filterQuery.verified = true;
+        break;
+      case 'unverified':
+        filterQuery.verified = false;
+        break;
+      default:
+        // 'all' - no additional filter
+        break;
+    }
+
+    // Combine queries
+    const finalQuery = {
+      ...searchQuery,
+      ...filterQuery
+    };
+
+    // Sort configuration
+    const sortConfig = {};
+    sortConfig[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    // Get users with pagination
+    const users = await User.find(finalQuery)
+      .sort(sortConfig)
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .select('-password');
+
+    // Get total count for pagination
+    const totalCount = await User.countDocuments(finalQuery);
+
+    // Enrich user data with additional stats
+    const enrichedUsers = await Promise.all(
+      users.map(async (user) => {
+        const [cardCount, spaceCount, invitationCount] = await Promise.all([
+          Card.countDocuments({ userId: user._id }),
+          Space.countDocuments({ owner: user._id }),
+          Invitation.countDocuments({ userId: user._id })
+        ]);
+
+        return {
+          ...user.toObject(),
+          cardCount,
+          spaceCount,
+          invitationCount,
+          status: getUserStatus(user),
+          lastActivityFormatted: user.lastLogin ? 
+            formatTimeAgo(user.lastLogin) : 'Never',
+          joinedFormatted: formatTimeAgo(user.createdAt)
+        };
+      })
+    );
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'view_user_management',
+      'user',
+      null,
+      null,
+      { page, limit, search, filter, totalResults: totalCount },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      data: {
+        users: enrichedUsers,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalCount / limit),
+          totalCount,
+          hasNextPage: page * limit < totalCount,
+          hasPrevPage: page > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('User management error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading user management data'
+    });
+  }
+};
+
+// Get detailed user information
+exports.getUserDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Get user's detailed stats
+    const [cards, spaces, invitations, aiConversations] = await Promise.all([
+      Card.find({ userId }).sort({ createdAt: -1 }).limit(10),
+      Space.find({ owner: userId }).sort({ createdAt: -1 }).limit(10),
+      Invitation.find({ userId }).sort({ createdAt: -1 }).limit(10),
+      AIChatConversation.find({ userId }).sort({ createdAt: -1 }).limit(5)
+    ]);
+
+    // Get activity stats
+    const [
+      totalCards,
+      totalSpaces,
+      totalInvitations,
+      totalAIChats,
+      recentCards,
+      recentSpaces
+    ] = await Promise.all([
+      Card.countDocuments({ userId }),
+      Space.countDocuments({ owner: userId }),
+      Invitation.countDocuments({ userId }),
+      AIChatConversation.countDocuments({ userId }),
+      Card.countDocuments({ 
+        userId, 
+        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      }),
+      Space.countDocuments({ 
+        owner: userId, 
+        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      })
+    ]);
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'view_user_details',
+      'user',
+      userId,
+      null,
+      { targetUserEmail: user.email },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          ...user.toObject(),
+          status: getUserStatus(user),
+          lastActivityFormatted: user.lastLogin ? 
+            formatTimeAgo(user.lastLogin) : 'Never',
+          joinedFormatted: formatTimeAgo(user.createdAt)
+        },
+        stats: {
+          totalCards,
+          totalSpaces,
+          totalInvitations,
+          totalAIChats,
+          recentCards,
+          recentSpaces
+        },
+        recentActivity: {
+          cards: cards.slice(0, 5),
+          spaces: spaces.slice(0, 5),
+          invitations: invitations.slice(0, 5),
+          aiConversations: aiConversations.slice(0, 3)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading user details'
+    });
+  }
+};
+
+// Update user information
+exports.updateUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name, email, verified, suspended, role } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if email is already in use by another user
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: userId } });
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already in use by another user'
+        });
+      }
+    }
+
+    // Update user fields
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
+    if (verified !== undefined) updateData.verified = verified;
+    if (suspended !== undefined) updateData.suspended = suspended;
+    if (role !== undefined) updateData.role = role;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      updateData,
+      { new: true }
+    ).select('-password');
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'update_user',
+      'user',
+      userId,
+      user.toObject(),
+      updatedUser.toObject(),
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: updatedUser
+    });
+
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating user'
+    });
+  }
+};
+
+// Toggle user status (suspend/activate)
+exports.toggleUserStatus = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { suspend } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user status
+    user.suspended = suspend;
+    await user.save();
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      suspend ? 'suspend_user' : 'activate_user',
+      'user',
+      userId,
+      { suspended: !suspend },
+      { suspended: suspend },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      message: `User ${suspend ? 'suspended' : 'activated'} successfully`,
+      data: user
+    });
+
+  } catch (error) {
+    console.error('Toggle user status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating user status'
+    });
+  }
+};
+
+// Delete user and their data
+exports.deleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Delete user's data
+    await Promise.all([
+      Card.deleteMany({ userId }),
+      Space.deleteMany({ owner: userId }),
+      Invitation.deleteMany({ userId }),
+      AIChatConversation.deleteMany({ userId }),
+      Connection.deleteMany({ $or: [{ from: userId }, { to: userId }] })
+    ]);
+
+    // Delete the user
+    await User.findByIdAndDelete(userId);
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'delete_user',
+      'user',
+      userId,
+      user.toObject(),
+      null,
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      message: 'User and all associated data deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting user'
+    });
+  }
+};
+
+// Bulk user actions
+exports.bulkUserAction = async (req, res) => {
+  try {
+    const { action, userIds } = req.body;
+
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'User IDs array is required'
+      });
+    }
+
+    let updateResult;
+    let logAction;
+    let message;
+
+    switch (action) {
+      case 'suspend':
+        updateResult = await User.updateMany(
+          { _id: { $in: userIds } },
+          { suspended: true }
+        );
+        logAction = 'BULK_SUSPEND_USERS';
+        message = `${updateResult.modifiedCount} users suspended successfully`;
+        break;
+
+      case 'activate':
+        updateResult = await User.updateMany(
+          { _id: { $in: userIds } },
+          { suspended: false }
+        );
+        logAction = 'BULK_ACTIVATE_USERS';
+        message = `${updateResult.modifiedCount} users activated successfully`;
+        break;
+
+      case 'verify':
+        updateResult = await User.updateMany(
+          { _id: { $in: userIds } },
+          { verified: true }
+        );
+        logAction = 'BULK_VERIFY_USERS';
+        message = `${updateResult.modifiedCount} users verified successfully`;
+        break;
+
+      case 'delete':
+        // Delete users and their data
+        await Promise.all([
+          Card.deleteMany({ userId: { $in: userIds } }),
+          Space.deleteMany({ owner: { $in: userIds } }),
+          Invitation.deleteMany({ userId: { $in: userIds } }),
+          AIChatConversation.deleteMany({ userId: { $in: userIds } }),
+          Connection.deleteMany({ 
+            $or: [
+              { from: { $in: userIds } }, 
+              { to: { $in: userIds } }
+            ] 
+          })
+        ]);
+
+        updateResult = await User.deleteMany({ _id: { $in: userIds } });
+        logAction = 'BULK_DELETE_USERS';
+        message = `${updateResult.deletedCount} users deleted successfully`;
+        break;
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid action'
+        });
+    }
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'bulk_user_action',
+      'user',
+      null,
+      { action, userIds },
+      { affectedCount: updateResult.modifiedCount || updateResult.deletedCount },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      message,
+      data: {
+        affectedCount: updateResult.modifiedCount || updateResult.deletedCount,
+        totalRequested: userIds.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Bulk user action error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error performing bulk action'
+    });
+  }
+};
+
+// Export user data
+exports.exportUserData = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Get all user data
+    const [cards, spaces, invitations, aiConversations, connections] = await Promise.all([
+      Card.find({ userId }),
+      Space.find({ owner: userId }),
+      Invitation.find({ userId }),
+      AIChatConversation.find({ userId }),
+      Connection.find({ $or: [{ from: userId }, { to: userId }] })
+    ]);
+
+    const exportData = {
+      user: user.toObject(),
+      cards,
+      spaces,
+      invitations,
+      aiConversations,
+      connections,
+      exportedAt: new Date().toISOString()
+    };
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'export_user_data',
+      'user',
+      userId,
+      null,
+      { userEmail: user.email },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+      res.json({
+    success: true,
+    data: exportData
+  });
+
+} catch (error) {
+  console.error('Export user data error:', error);
+  res.status(500).json({
+    success: false,
+    message: 'Error exporting user data'
+  });
+}
+};
+
+// Reset user password
+exports.resetUserPassword = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Generate temporary password
+    const tempPassword = Math.random().toString(36).slice(-8);
+    const bcrypt = require('bcryptjs');
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    // Update user password
+    user.password = hashedPassword;
+    user.passwordResetRequired = true; // Flag to require password change on next login
+    await user.save();
+
+    // Log admin action
+    await logAdminAction(
+      req.admin._id,
+      req.admin.email,
+      'reset_user_password',
+      'user',
+      userId,
+      null,
+      { passwordResetRequired: true },
+      req.ip,
+      req.get('User-Agent'),
+      true
+    );
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully',
+      data: {
+        temporaryPassword: tempPassword,
+        passwordResetRequired: true
+      }
+    });
+
+  } catch (error) {
+    console.error('Reset user password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error resetting password'
+    });
+  }
+};
+
+
+
+// Helper functions
+function getUserStatus(user) {
+  if (user.suspended) return 'suspended';
+  if (!user.verified) return 'unverified';
+  
+  const activeThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  if (user.lastLogin && user.lastLogin >= activeThreshold) {
+    return 'active';
+  }
+  return 'inactive';
+}
+
+function formatTimeAgo(date) {
+  const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+  
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+  if (seconds < 2592000) return `${Math.floor(seconds / 86400)} days ago`;
+  if (seconds < 31536000) return `${Math.floor(seconds / 2592000)} months ago`;
+  return `${Math.floor(seconds / 31536000)} years ago`;
+}
 
 module.exports = exports; 
