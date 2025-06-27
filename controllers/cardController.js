@@ -189,7 +189,6 @@ exports.updateCard = async (req, res) => {
     
     await card.save();
     
-    console.log(`Successfully updated card ${id} for user ${userId}/${userEmail}`);
     res.json(card);
   } catch (error) {
     console.error("Error updating card:", error);
@@ -200,16 +199,46 @@ exports.updateCard = async (req, res) => {
 // Delete a card
 exports.deleteCard = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { id } = req.params;
     
-    // Find card and ensure it belongs to the user
-    const card = await Card.findOne({ _id: id, userId });
+    console.log(`User ${userId}/${userEmail} attempting to delete card ${id}`);
+    
+    // Find card first
+    const card = await Card.findOne({ _id: id });
     
     if (!card) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Card not found or you do not have permission to delete it' 
+        message: 'Card not found' 
+      });
+    }
+    
+    // Check if user has permission to delete this card
+    let hasPermission = false;
+    
+    if (card.spaceId === 'public' || card.userId === userEmail) {
+      hasPermission = true;
+    } else if (card.spaceId && card.spaceId !== 'public') {
+      // For private space cards, check if user has access to the space
+      try {
+        const space = await Space.findById(card.spaceId);
+        if (space) {
+          const hasAccess = space.hasAccess(userId);
+          if (hasAccess && space.canUserEdit(userId)) {
+            hasPermission = true;
+          }
+        }
+      } catch (spaceError) {
+        console.error(`Error checking space permissions for card ${id}:`, spaceError);
+      }
+    }
+    
+    if (!hasPermission) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You do not have permission to delete this card' 
       });
     }
     
@@ -217,11 +246,21 @@ exports.deleteCard = async (req, res) => {
     await Card.deleteOne({ _id: id });
     
     // Also remove any connections that involve this card
-    await Connection.deleteMany({
-      userId,
-      $or: [{ sourceId: id }, { targetId: id }]
-    });
+    // For public space, remove all connections
+    // For private spaces, remove connections in the same space
+    if (card.spaceId === 'public') {
+      await Connection.deleteMany({
+        spaceId: 'public',
+        $or: [{ sourceId: id }, { targetId: id }]
+      });
+    } else {
+      await Connection.deleteMany({
+        spaceId: card.spaceId,
+        $or: [{ sourceId: id }, { targetId: id }]
+      });
+    }
     
+    console.log(`Successfully deleted card ${id} for user ${userId}/${userEmail}`);
     res.json({ success: true, message: 'Card deleted successfully' });
   } catch (error) {
     console.error("Error deleting card:", error);
@@ -232,8 +271,11 @@ exports.deleteCard = async (req, res) => {
 // Delete multiple cards
 exports.deleteMultipleCards = async (req, res) => {
   try {
-    const userId = req.user.email;
+    const userEmail = req.user.email;
+    const userId = req.user.id;
     const { ids } = req.body;
+    
+    console.log(`User ${userId}/${userEmail} attempting to delete multiple cards:`, ids);
     
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ 
@@ -242,31 +284,91 @@ exports.deleteMultipleCards = async (req, res) => {
       });
     }
     
-    // Check if all cards belong to the current user
-    const cards = await Card.find({ _id: { $in: ids }, userId });
+    // Find all cards first
+    const cards = await Card.find({ _id: { $in: ids } });
     
-    if (cards.length !== ids.length) {
-      return res.status(403).json({ 
+    if (cards.length === 0) {
+      return res.status(404).json({ 
         success: false, 
-        message: 'You do not have permission to delete one or more of these cards' 
+        message: 'No cards found' 
       });
     }
     
-    // Delete the cards
-    await Card.deleteMany({ _id: { $in: ids }, userId });
+    // Check permissions for each card
+    const allowedCardIds = [];
+    const spaceMap = new Map();
+    
+    for (const card of cards) {
+      let hasPermission = false;
+      
+      if (card.spaceId === 'public' || card.userId === userEmail) {
+        hasPermission = true;
+      } else if (card.spaceId && card.spaceId !== 'public') {
+        // For private space cards, check if user has access to the space
+        try {
+          let space = spaceMap.get(card.spaceId);
+          if (!space) {
+            space = await Space.findById(card.spaceId);
+            spaceMap.set(card.spaceId, space);
+          }
+          
+          if (space) {
+            const hasAccess = space.hasAccess(userId);
+            if (hasAccess && space.canUserEdit(userId)) {
+              hasPermission = true;
+            }
+          }
+        } catch (spaceError) {
+          console.error(`Error checking space permissions for card ${card._id}:`, spaceError);
+        }
+      }
+      
+      if (hasPermission) {
+        allowedCardIds.push(card._id);
+      }
+    }
+    
+    if (allowedCardIds.length === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You do not have permission to delete any of these cards' 
+      });
+    }
+    
+    // Delete the allowed cards
+    await Card.deleteMany({ _id: { $in: allowedCardIds } });
     
     // Also remove any connections that involve these cards
-    await Connection.deleteMany({
-      userId,
-      $or: [
-        { sourceId: { $in: ids } },
-        { targetId: { $in: ids } }
-      ]
+    // Group by space for efficient deletion
+    const spaceCardMap = new Map();
+    cards.forEach(card => {
+      if (allowedCardIds.includes(card._id)) {
+        const spaceId = card.spaceId || 'public';
+        if (!spaceCardMap.has(spaceId)) {
+          spaceCardMap.set(spaceId, []);
+        }
+        spaceCardMap.get(spaceId).push(card._id);
+      }
     });
+    
+    // Delete connections for each space
+    for (const [spaceId, cardIds] of spaceCardMap) {
+      await Connection.deleteMany({
+        spaceId: spaceId,
+        $or: [
+          { sourceId: { $in: cardIds } },
+          { targetId: { $in: cardIds } }
+        ]
+      });
+    }
+    
+    console.log(`Successfully deleted ${allowedCardIds.length} out of ${ids.length} cards for user ${userId}/${userEmail}`);
     
     res.json({ 
       success: true, 
-      message: `${ids.length} cards deleted successfully` 
+      message: `${allowedCardIds.length} cards deleted successfully`,
+      deleted: allowedCardIds.length,
+      total: ids.length
     });
   } catch (error) {
     console.error("Error deleting multiple cards:", error);
@@ -630,7 +732,6 @@ exports.updateCardPositions = async (req, res) => {
             { new: true }
           );
           
-          console.log(`Successfully updated card ${item.id} position`);
           return updatedCard;
         } else {
           // For private space cards, check if user has access to the space
@@ -651,7 +752,6 @@ exports.updateCardPositions = async (req, res) => {
                     { new: true }
                   );
                   
-                  console.log(`Successfully updated card ${item.id} position in space ${card.spaceId}`);
                   return updatedCard;
                 } else {
                   console.log(`User ${userId} does not have edit access to space ${card.spaceId}`);

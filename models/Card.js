@@ -31,7 +31,7 @@ const cardSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['category', 'answer', 'question', 'note']
+    enum: ['category', 'answer', 'question', 'note', 'label']
   },
   title: {
     type: String,
@@ -41,6 +41,12 @@ const cardSchema = new mongoose.Schema({
   content: {
     type: String,
     default: null
+  },
+  fontSize: {
+    type: Number,
+    default: 250,
+    min: 150,
+    max: 400
   },
   position: {
     type: positionSchema,
