@@ -20,4 +20,7 @@ router.delete('/connections/:id', cardController.deleteConnection);
 // Canvas state route
 router.post('/canvas-state', cardController.saveCanvasState);
 
+// Delete all connections for a card
+router.delete('/:cardId/connections', cardController.deleteAllConnectionsForCard);
+
 module.exports = router;

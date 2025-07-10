@@ -923,3 +923,81 @@ exports.searchCards = async (req, res) => {
     });
   }
 };
+
+// Delete all connections for a specific card
+exports.deleteAllConnectionsForCard = async (req, res) => {
+  try {
+    const userEmail = req.user.email;
+    const userId = req.user.id;
+    const { cardId } = req.params;
+    
+    console.log(`User ${userId}/${userEmail} requesting to delete all connections for card ${cardId}`);
+    
+    if (!cardId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Card ID is required' 
+      });
+    }
+    
+    // Find all connections involving this card
+    const connectionsToDelete = await Connection.find({
+      $or: [
+        { sourceId: cardId },
+        { targetId: cardId }
+      ]
+    });
+    
+    console.log(`Found ${connectionsToDelete.length} connections to delete for card ${cardId}`);
+    
+    if (connectionsToDelete.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No connections found for this card',
+        deletedCount: 0
+      });
+    }
+    
+    // Check permissions - user should have access to the space these connections belong to
+    for (const connection of connectionsToDelete) {
+      if (connection.spaceId && connection.spaceId !== 'public') {
+        try {
+          const space = await Space.findById(connection.spaceId);
+          if (space && !space.hasAccess(userId)) {
+            console.log(`User ${userId} denied access to space ${connection.spaceId} for connection ${connection.id}`);
+            return res.status(403).json({ 
+              success: false, 
+              message: 'Access denied to one or more connections' 
+            });
+          }
+        } catch (spaceError) {
+          console.error("Error checking space access:", spaceError);
+          return res.status(500).json({ 
+            success: false, 
+            message: 'Error checking space access' 
+          });
+        }
+      }
+    }
+    
+    // Delete all connections
+    const deleteResult = await Connection.deleteMany({
+      $or: [
+        { sourceId: cardId },
+        { targetId: cardId }
+      ]
+    });
+    
+    console.log(`Successfully deleted ${deleteResult.deletedCount} connections for card ${cardId}`);
+    
+    res.json({ 
+      success: true, 
+      message: `Deleted ${deleteResult.deletedCount} connections`,
+      deletedCount: deleteResult.deletedCount,
+      deletedConnections: connectionsToDelete.map(conn => conn.id)
+    });
+  } catch (error) {
+    console.error("Error deleting connections for card:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
